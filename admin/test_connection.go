@@ -21,10 +21,10 @@ import (
 // testEvent SSE 测试事件
 type testEvent struct {
 	Type    string `json:"type"`              // test_start | content | test_complete | error
-	Text    string `json:"text,omitempty"`     // 内容文本
-	Model   string `json:"model,omitempty"`    // 测试模型
-	Success bool   `json:"success,omitempty"`  // 是否成功
-	Error   string `json:"error,omitempty"`    // 错误信息
+	Text    string `json:"text,omitempty"`    // 内容文本
+	Model   string `json:"model,omitempty"`   // 测试模型
+	Success bool   `json:"success,omitempty"` // 是否成功
+	Error   string `json:"error,omitempty"`   // 错误信息
 }
 
 // TestConnection 测试账号连接（SSE 流式返回）
@@ -79,9 +79,11 @@ func (h *Handler) TestConnection(c *gin.Context) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// 401 → 标记账号为封禁状态
-		if resp.StatusCode == http.StatusUnauthorized {
-			account.SetCooldownWithReason(24*time.Hour, "unauthorized")
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			h.store.MarkCooldown(account, 24*time.Hour, "unauthorized")
+		case http.StatusTooManyRequests:
+			h.store.MarkCooldown(account, 5*time.Minute, "rate_limited")
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		sendTestEvent(c, testEvent{Type: "error", Error: fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(errBody), 500))})
@@ -101,10 +103,11 @@ func (h *Handler) TestConnection(c *gin.Context) {
 				sendTestEvent(c, testEvent{Type: "content", Text: delta})
 			}
 		case "response.completed":
+			h.store.ClearCooldown(account)
 			duration := time.Since(start).Milliseconds()
 			sendTestEvent(c, testEvent{
-				Type:    "content",
-				Text:    fmt.Sprintf("\n\n--- 耗时 %dms ---", duration),
+				Type: "content",
+				Text: fmt.Sprintf("\n\n--- 耗时 %dms ---", duration),
 			})
 			sendTestEvent(c, testEvent{Type: "test_complete", Success: true})
 			return false
@@ -181,12 +184,12 @@ func (h *Handler) BatchTest(c *gin.Context) {
 	concurrency := h.store.GetTestConcurrency()
 
 	var (
-		successCount    int64
-		failedCount     int64
-		bannedCount     int64
-		rateLimitCount  int64
-		wg              sync.WaitGroup
-		sem             = make(chan struct{}, concurrency)
+		successCount   int64
+		failedCount    int64
+		bannedCount    int64
+		rateLimitCount int64
+		wg             sync.WaitGroup
+		sem            = make(chan struct{}, concurrency)
 	)
 
 	for _, account := range accounts {
@@ -215,12 +218,13 @@ func (h *Handler) BatchTest(c *gin.Context) {
 
 			switch resp.StatusCode {
 			case http.StatusOK:
+				h.store.ClearCooldown(acc)
 				atomic.AddInt64(&successCount, 1)
 			case http.StatusUnauthorized:
-				acc.SetCooldownWithReason(24*time.Hour, "unauthorized")
+				h.store.MarkCooldown(acc, 24*time.Hour, "unauthorized")
 				atomic.AddInt64(&bannedCount, 1)
 			case http.StatusTooManyRequests:
-				acc.SetCooldownWithReason(5*time.Minute, "rate_limited")
+				h.store.MarkCooldown(acc, 5*time.Minute, "rate_limited")
 				atomic.AddInt64(&rateLimitCount, 1)
 			default:
 				atomic.AddInt64(&failedCount, 1)

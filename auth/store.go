@@ -25,19 +25,19 @@ const (
 
 // Account 运行时账号状态
 type Account struct {
-	mu           sync.RWMutex
-	DBID         int64  // 数据库 ID
-	RefreshToken string
-	AccessToken  string
-	ExpiresAt    time.Time
-	AccountID    string
-	Email        string
-	PlanType     string
-	ProxyURL     string
-	Status       AccountStatus
-	CooldownUtil time.Time
+	mu             sync.RWMutex
+	DBID           int64 // 数据库 ID
+	RefreshToken   string
+	AccessToken    string
+	ExpiresAt      time.Time
+	AccountID      string
+	Email          string
+	PlanType       string
+	ProxyURL       string
+	Status         AccountStatus
+	CooldownUtil   time.Time
 	CooldownReason string // rate_limited / unauthorized / 空
-	ErrorMsg     string
+	ErrorMsg       string
 
 	// 用量进度（从 Codex 响应头被动解析）
 	UsagePercent7d float64 // 7d 窗口使用率 0-100+
@@ -85,19 +85,20 @@ func (a *Account) NeedsRefresh() bool {
 
 // SetCooldown 设置冷却时间
 func (a *Account) SetCooldown(duration time.Duration) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.Status = StatusCooldown
-	a.CooldownUtil = time.Now().Add(duration)
-	a.CooldownReason = ""
+	a.SetCooldownUntil(time.Now().Add(duration), "")
 }
 
 // SetCooldownWithReason 设置冷却时间（带原因）
 func (a *Account) SetCooldownWithReason(duration time.Duration, reason string) {
+	a.SetCooldownUntil(time.Now().Add(duration), reason)
+}
+
+// SetCooldownUntil 设置冷却结束时间（带原因）
+func (a *Account) SetCooldownUntil(until time.Time, reason string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.Status = StatusCooldown
-	a.CooldownUtil = time.Now().Add(duration)
+	a.CooldownUtil = until
 	a.CooldownReason = reason
 }
 
@@ -272,6 +273,15 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 			account.Email = row.GetCredential("email")
 			account.PlanType = row.GetCredential("plan_type")
 		}
+		if row.CooldownUntil.Valid {
+			if time.Now().Before(row.CooldownUntil.Time) {
+				account.SetCooldownUntil(row.CooldownUntil.Time, row.CooldownReason)
+			} else if row.CooldownReason != "" {
+				if err := s.db.ClearCooldown(ctx, row.ID); err != nil {
+					log.Printf("[账号 %d] 清理过期冷却状态失败: %v", row.ID, err)
+				}
+			}
+		}
 
 		s.accounts = append(s.accounts, account)
 	}
@@ -440,6 +450,51 @@ func (s *Store) FindByID(dbID int64) *Account {
 		}
 	}
 	return nil
+}
+
+// MarkCooldown 标记账号进入冷却，并持久化到数据库
+func (s *Store) MarkCooldown(acc *Account, duration time.Duration, reason string) {
+	if acc == nil {
+		return
+	}
+
+	until := time.Now().Add(duration)
+	acc.SetCooldownUntil(until, reason)
+
+	if s.db == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.db.SetCooldown(ctx, acc.DBID, reason, until); err != nil {
+		log.Printf("[账号 %d] 持久化冷却状态失败: %v", acc.DBID, err)
+	}
+}
+
+// ClearCooldown 清除账号冷却状态，并同步清理数据库
+func (s *Store) ClearCooldown(acc *Account) {
+	if acc == nil {
+		return
+	}
+
+	acc.mu.Lock()
+	if acc.Status == StatusCooldown {
+		acc.Status = StatusReady
+	}
+	acc.CooldownUtil = time.Time{}
+	acc.CooldownReason = ""
+	acc.mu.Unlock()
+
+	if s.db == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.db.ClearCooldown(ctx, acc.DBID); err != nil {
+		log.Printf("[账号 %d] 清理冷却状态失败: %v", acc.DBID, err)
+	}
 }
 
 // RefreshSingle 刷新单个账号（供 admin handler 调用）

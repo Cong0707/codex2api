@@ -14,16 +14,18 @@ import (
 
 // AccountRow 数据库中的账号行
 type AccountRow struct {
-	ID           int64
-	Name         string
-	Platform     string
-	Type         string
-	Credentials  map[string]interface{}
-	ProxyURL     string
-	Status       string
-	ErrorMessage string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID             int64
+	Name           string
+	Platform       string
+	Type           string
+	Credentials    map[string]interface{}
+	ProxyURL       string
+	Status         string
+	CooldownReason string
+	CooldownUntil  sql.NullTime
+	ErrorMessage   string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // GetCredential 从 credentials JSONB 获取字符串字段
@@ -50,10 +52,10 @@ type DB struct {
 	conn *sql.DB
 
 	// 使用日志批量写入缓冲
-	logBuf   []usageLogEntry
-	logMu    sync.Mutex
-	logStop  chan struct{}
-	logWg    sync.WaitGroup
+	logBuf  []usageLogEntry
+	logMu   sync.Mutex
+	logStop chan struct{}
+	logWg   sync.WaitGroup
 }
 
 // usageLogEntry 日志缓冲条目
@@ -87,8 +89,8 @@ func New(dsn string) (*DB, error) {
 
 	// ==================== 连接池优化 ====================
 	// 高并发场景：大量 RT 刷新 + 前端查询 + 使用日志写入 并行
-	conn.SetMaxOpenConns(50)              // 最大打开连接数（默认无限制，限制避免 PG too many connections）
-	conn.SetMaxIdleConns(25)              // 空闲连接数（保持足够的热连接避免频繁建连）
+	conn.SetMaxOpenConns(50)                  // 最大打开连接数（默认无限制，限制避免 PG too many connections）
+	conn.SetMaxIdleConns(25)                  // 空闲连接数（保持足够的热连接避免频繁建连）
 	conn.SetConnMaxLifetime(30 * time.Minute) // 连接最大生存时间（避免长连接僵死）
 	conn.SetConnMaxIdleTime(10 * time.Minute) // 空闲连接最大闲置时间
 
@@ -160,8 +162,13 @@ func (db *DB) migrate(ctx context.Context) error {
 		updated_at    TIMESTAMP DEFAULT NOW()
 	);
 
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cooldown_reason VARCHAR(50) DEFAULT '';
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMP NULL;
+
 	CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
 	CREATE INDEX IF NOT EXISTS idx_accounts_platform ON accounts(platform);
+	CREATE INDEX IF NOT EXISTS idx_accounts_cooldown_until ON accounts(cooldown_until);
+
 
 	CREATE TABLE IF NOT EXISTS usage_logs (
 		id             SERIAL PRIMARY KEY,
@@ -574,7 +581,7 @@ func (db *DB) GetAccountRequestCounts(ctx context.Context) (map[int64]*AccountRe
 // ListActive 获取所有状态为 active 的账号
 func (db *DB) ListActive(ctx context.Context) ([]*AccountRow, error) {
 	query := `
-		SELECT id, name, platform, type, credentials, proxy_url, status, error_message, created_at, updated_at
+		SELECT id, name, platform, type, credentials, proxy_url, status, cooldown_reason, cooldown_until, error_message, created_at, updated_at
 		FROM accounts
 		WHERE status = 'active'
 		ORDER BY id
@@ -589,7 +596,20 @@ func (db *DB) ListActive(ctx context.Context) ([]*AccountRow, error) {
 	for rows.Next() {
 		a := &AccountRow{}
 		var credJSON []byte
-		if err := rows.Scan(&a.ID, &a.Name, &a.Platform, &a.Type, &credJSON, &a.ProxyURL, &a.Status, &a.ErrorMessage, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&a.ID,
+			&a.Name,
+			&a.Platform,
+			&a.Type,
+			&credJSON,
+			&a.ProxyURL,
+			&a.Status,
+			&a.CooldownReason,
+			&a.CooldownUntil,
+			&a.ErrorMessage,
+			&a.CreatedAt,
+			&a.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("扫描账号行失败: %w", err)
 		}
 		if err := json.Unmarshal(credJSON, &a.Credentials); err != nil {
@@ -618,14 +638,28 @@ func (db *DB) UpdateCredentials(ctx context.Context, id int64, credentials map[s
 
 // SetError 标记账号错误状态
 func (db *DB) SetError(ctx context.Context, id int64, errorMsg string) error {
-	query := `UPDATE accounts SET status = 'error', error_message = $1, updated_at = NOW() WHERE id = $2`
+	query := `UPDATE accounts SET status = 'error', error_message = $1, cooldown_reason = '', cooldown_until = NULL, updated_at = NOW() WHERE id = $2`
 	_, err := db.conn.ExecContext(ctx, query, errorMsg, id)
 	return err
 }
 
 // ClearError 清除账号错误状态
 func (db *DB) ClearError(ctx context.Context, id int64) error {
-	query := `UPDATE accounts SET status = 'active', error_message = '', updated_at = NOW() WHERE id = $1`
+	query := `UPDATE accounts SET status = 'active', error_message = '', cooldown_reason = '', cooldown_until = NULL, updated_at = NOW() WHERE id = $1`
+	_, err := db.conn.ExecContext(ctx, query, id)
+	return err
+}
+
+// SetCooldown 持久化账号冷却状态
+func (db *DB) SetCooldown(ctx context.Context, id int64, reason string, until time.Time) error {
+	query := `UPDATE accounts SET cooldown_reason = $1, cooldown_until = $2, updated_at = NOW() WHERE id = $3`
+	_, err := db.conn.ExecContext(ctx, query, reason, until, id)
+	return err
+}
+
+// ClearCooldown 清除账号冷却状态
+func (db *DB) ClearCooldown(ctx context.Context, id int64) error {
+	query := `UPDATE accounts SET cooldown_reason = '', cooldown_until = NULL, updated_at = NOW() WHERE id = $1`
 	_, err := db.conn.ExecContext(ctx, query, id)
 	return err
 }

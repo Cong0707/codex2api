@@ -399,7 +399,6 @@ func (h *Handler) Responses(c *gin.Context) {
 	}
 }
 
-
 func (h *Handler) ChatCompletions(c *gin.Context) {
 	// 1. 读取请求体
 	rawBody, err := io.ReadAll(c.Request.Body)
@@ -729,9 +728,9 @@ func (h *Handler) applyCooldown(account *auth.Account, statusCode int, body []by
 			cooldown = 15 * time.Minute
 		}
 		log.Printf("账号 %d 被限速，冷却 %v", account.ID(), cooldown)
-		account.SetCooldownWithReason(cooldown, "rate_limited")
+		h.store.MarkCooldown(account, cooldown, "rate_limited")
 	case http.StatusUnauthorized:
-		account.SetCooldownWithReason(5*time.Minute, "unauthorized")
+		h.store.MarkCooldown(account, 5*time.Minute, "unauthorized")
 	}
 }
 
