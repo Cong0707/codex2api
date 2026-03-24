@@ -52,11 +52,23 @@ function formatTime(iso: string): string {
   }
 }
 
-function getStatusBadgeVariant(statusCode: number): 'default' | 'secondary' | 'destructive' {
-  if (statusCode === 200) return 'default'
-  if (statusCode === 401) return 'destructive'
-  if (statusCode === 429) return 'secondary'
-  return statusCode < 400 ? 'default' : statusCode < 500 ? 'secondary' : 'destructive'
+function getStatusBadgeClassName(statusCode: number): string {
+  if (statusCode === 200) {
+    return 'border-transparent bg-emerald-500/14 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300'
+  }
+  if (statusCode === 401) {
+    return 'border-transparent bg-red-500/14 text-red-600 dark:bg-red-500/20 dark:text-red-300'
+  }
+  if (statusCode === 429) {
+    return 'border-transparent bg-amber-500/14 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300'
+  }
+  if (statusCode >= 500) {
+    return 'border-transparent bg-red-500/14 text-red-600 dark:bg-red-500/20 dark:text-red-300'
+  }
+  if (statusCode >= 400) {
+    return 'border-transparent bg-amber-500/14 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300'
+  }
+  return 'border-transparent bg-slate-500/14 text-slate-600 dark:bg-slate-500/20 dark:text-slate-300'
 }
 
 export default function Usage() {
@@ -276,8 +288,8 @@ export default function Usage() {
                       <TableRow key={log.id}>
                         <TableCell>
                           <Badge
-                            variant={getStatusBadgeVariant(log.status_code)}
-                            className="text-[14px]"
+                            variant="outline"
+                            className={`text-[14px] ${getStatusBadgeClassName(log.status_code)}`}
                           >
                             {log.status_code}
                           </Badge>
