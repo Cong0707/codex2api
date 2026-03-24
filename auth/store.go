@@ -562,20 +562,23 @@ func (a *Account) GetLastUsedAt() time.Time {
 
 // Store 多账号管理器（PG + Redis）
 type Store struct {
-	mu                 sync.RWMutex
-	accounts           []*Account
-	globalProxy        string
-	maxConcurrency     int64        // 每账号最大并发数
-	testConcurrency    int64        // 批量测试并发数
-	testModel          atomic.Value // 测试连接使用的模型（string）
-	db                 *database.DB
-	tokenCache         *cache.TokenCache
-	usageProbeMu       sync.RWMutex
-	usageProbe         func(context.Context, *Account) error
-	usageProbeBatch    atomic.Bool
-	recoveryProbeBatch atomic.Bool
-	stopCh             chan struct{}
-	wg                 sync.WaitGroup
+	mu                    sync.RWMutex
+	accounts              []*Account
+	globalProxy           string
+	maxConcurrency        int64        // 每账号最大并发数
+	testConcurrency       int64        // 批量测试并发数
+	testModel             atomic.Value // 测试连接使用的模型（string）
+	db                    *database.DB
+	tokenCache            *cache.TokenCache
+	usageProbeMu          sync.RWMutex
+	usageProbe            func(context.Context, *Account) error
+	usageProbeBatch       atomic.Bool
+	recoveryProbeBatch    atomic.Bool
+	autoCleanUnauthorized atomic.Bool
+	autoCleanRateLimited  atomic.Bool
+	autoCleanupBatch      atomic.Bool
+	stopCh                chan struct{}
+	wg                    sync.WaitGroup
 }
 
 // NewStore 创建账号管理器
@@ -597,6 +600,8 @@ func NewStore(db *database.DB, tc *cache.TokenCache, settings *database.SystemSe
 		stopCh:          make(chan struct{}),
 	}
 	s.testModel.Store(settings.TestModel)
+	s.autoCleanUnauthorized.Store(settings.AutoCleanUnauthorized)
+	s.autoCleanRateLimited.Store(settings.AutoCleanRateLimited)
 	return s
 }
 
@@ -612,6 +617,26 @@ func (s *Store) SetProxyURL(url string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.globalProxy = url
+}
+
+// GetAutoCleanUnauthorized 获取是否自动清理 401 账号
+func (s *Store) GetAutoCleanUnauthorized() bool {
+	return s.autoCleanUnauthorized.Load()
+}
+
+// SetAutoCleanUnauthorized 设置是否自动清理 401 账号
+func (s *Store) SetAutoCleanUnauthorized(enabled bool) {
+	s.autoCleanUnauthorized.Store(enabled)
+}
+
+// GetAutoCleanRateLimited 获取是否自动清理 429 账号
+func (s *Store) GetAutoCleanRateLimited() bool {
+	return s.autoCleanRateLimited.Load()
+}
+
+// SetAutoCleanRateLimited 设置是否自动清理 429 账号
+func (s *Store) SetAutoCleanRateLimited(enabled bool) {
+	s.autoCleanRateLimited.Store(enabled)
 }
 
 // Init 初始化：从 PG 加载账号
@@ -726,15 +751,19 @@ func (s *Store) StartBackgroundRefresh() {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		ticker := time.NewTicker(2 * time.Minute)
-		defer ticker.Stop()
+		refreshTicker := time.NewTicker(2 * time.Minute)
+		autoCleanupTicker := time.NewTicker(30 * time.Second)
+		defer refreshTicker.Stop()
+		defer autoCleanupTicker.Stop()
 
 		for {
 			select {
-			case <-ticker.C:
+			case <-refreshTicker.C:
 				s.parallelRefreshAll(context.Background())
 				s.TriggerUsageProbeAsync()
 				s.TriggerRecoveryProbeAsync()
+			case <-autoCleanupTicker.C:
+				s.TriggerAutoCleanupAsync()
 			case <-s.stopCh:
 				return
 			}
@@ -746,6 +775,30 @@ func (s *Store) StartBackgroundRefresh() {
 func (s *Store) Stop() {
 	close(s.stopCh)
 	s.wg.Wait()
+}
+
+// CleanByRuntimeStatus 按运行时状态清理账号
+func (s *Store) CleanByRuntimeStatus(ctx context.Context, targetStatus string) int {
+	accounts := s.Accounts()
+	cleaned := 0
+
+	for _, acc := range accounts {
+		if acc == nil || acc.RuntimeStatus() != targetStatus {
+			continue
+		}
+
+		if s.db != nil {
+			if err := s.db.SetError(ctx, acc.DBID, "deleted"); err != nil {
+				log.Printf("[账号 %d] 清理 %s 状态失败: %v", acc.DBID, targetStatus, err)
+				continue
+			}
+		}
+
+		s.RemoveAccount(acc.DBID)
+		cleaned++
+	}
+
+	return cleaned
 }
 
 // ==================== 最少连接调度 ====================
@@ -1086,6 +1139,41 @@ func (s *Store) TriggerRecoveryProbeAsync() {
 		defer s.recoveryProbeBatch.Store(false)
 		s.parallelRecoveryProbe(context.Background())
 	}()
+}
+
+// TriggerAutoCleanupAsync 异步触发一次自动清理巡检
+func (s *Store) TriggerAutoCleanupAsync() {
+	if !s.autoCleanupBatch.CompareAndSwap(false, true) {
+		return
+	}
+
+	go func() {
+		defer s.autoCleanupBatch.Store(false)
+		s.runAutoCleanupSweep(context.Background())
+	}()
+}
+
+func (s *Store) runAutoCleanupSweep(ctx context.Context) {
+	if !s.GetAutoCleanUnauthorized() && !s.GetAutoCleanRateLimited() {
+		return
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cleanedUnauthorized := 0
+	cleanedRateLimited := 0
+
+	if s.GetAutoCleanUnauthorized() {
+		cleanedUnauthorized = s.CleanByRuntimeStatus(cleanupCtx, "unauthorized")
+	}
+	if s.GetAutoCleanRateLimited() {
+		cleanedRateLimited = s.CleanByRuntimeStatus(cleanupCtx, "rate_limited")
+	}
+
+	if cleanedUnauthorized > 0 || cleanedRateLimited > 0 {
+		log.Printf("自动清理完成: unauthorized=%d, rate_limited=%d", cleanedUnauthorized, cleanedRateLimited)
+	}
 }
 
 func (s *Store) parallelProbeUsage(ctx context.Context) {

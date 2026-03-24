@@ -499,35 +499,41 @@ func (h *Handler) DeleteAPIKey(c *gin.Context) {
 // ==================== Settings ====================
 
 type settingsResponse struct {
-	MaxConcurrency  int    `json:"max_concurrency"`
-	GlobalRPM       int    `json:"global_rpm"`
-	TestModel       string `json:"test_model"`
-	TestConcurrency int    `json:"test_concurrency"`
-	ProxyURL        string `json:"proxy_url"`
-	PgMaxConns      int    `json:"pg_max_conns"`
-	RedisPoolSize   int    `json:"redis_pool_size"`
+	MaxConcurrency        int    `json:"max_concurrency"`
+	GlobalRPM             int    `json:"global_rpm"`
+	TestModel             string `json:"test_model"`
+	TestConcurrency       int    `json:"test_concurrency"`
+	ProxyURL              string `json:"proxy_url"`
+	PgMaxConns            int    `json:"pg_max_conns"`
+	RedisPoolSize         int    `json:"redis_pool_size"`
+	AutoCleanUnauthorized bool   `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited  bool   `json:"auto_clean_rate_limited"`
 }
 
 type updateSettingsReq struct {
-	MaxConcurrency  *int    `json:"max_concurrency"`
-	GlobalRPM       *int    `json:"global_rpm"`
-	TestModel       *string `json:"test_model"`
-	TestConcurrency *int    `json:"test_concurrency"`
-	ProxyURL        *string `json:"proxy_url"`
-	PgMaxConns      *int    `json:"pg_max_conns"`
-	RedisPoolSize   *int    `json:"redis_pool_size"`
+	MaxConcurrency        *int    `json:"max_concurrency"`
+	GlobalRPM             *int    `json:"global_rpm"`
+	TestModel             *string `json:"test_model"`
+	TestConcurrency       *int    `json:"test_concurrency"`
+	ProxyURL              *string `json:"proxy_url"`
+	PgMaxConns            *int    `json:"pg_max_conns"`
+	RedisPoolSize         *int    `json:"redis_pool_size"`
+	AutoCleanUnauthorized *bool   `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited  *bool   `json:"auto_clean_rate_limited"`
 }
 
 // GetSettings 获取当前系统设置
 func (h *Handler) GetSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, settingsResponse{
-		MaxConcurrency:  h.store.GetMaxConcurrency(),
-		GlobalRPM:       h.rateLimiter.GetRPM(),
-		TestModel:       h.store.GetTestModel(),
-		TestConcurrency: h.store.GetTestConcurrency(),
-		ProxyURL:        h.store.GetProxyURL(),
-		PgMaxConns:      h.pgMaxConns,
-		RedisPoolSize:   h.redisPoolSize,
+		MaxConcurrency:        h.store.GetMaxConcurrency(),
+		GlobalRPM:             h.rateLimiter.GetRPM(),
+		TestModel:             h.store.GetTestModel(),
+		TestConcurrency:       h.store.GetTestConcurrency(),
+		ProxyURL:              h.store.GetProxyURL(),
+		PgMaxConns:            h.pgMaxConns,
+		RedisPoolSize:         h.redisPoolSize,
+		AutoCleanUnauthorized: h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:  h.store.GetAutoCleanRateLimited(),
 	})
 }
 
@@ -608,28 +614,46 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		log.Printf("设置已更新: redis_pool_size = %d", v)
 	}
 
+	if req.AutoCleanUnauthorized != nil {
+		h.store.SetAutoCleanUnauthorized(*req.AutoCleanUnauthorized)
+		log.Printf("设置已更新: auto_clean_unauthorized = %t", *req.AutoCleanUnauthorized)
+	}
+
+	if req.AutoCleanRateLimited != nil {
+		h.store.SetAutoCleanRateLimited(*req.AutoCleanRateLimited)
+		log.Printf("设置已更新: auto_clean_rate_limited = %t", *req.AutoCleanRateLimited)
+	}
+
 	// 持久化保存到数据库
 	err := h.db.UpdateSystemSettings(c.Request.Context(), &database.SystemSettings{
-		MaxConcurrency:  h.store.GetMaxConcurrency(),
-		GlobalRPM:       h.rateLimiter.GetRPM(),
-		TestModel:       h.store.GetTestModel(),
-		TestConcurrency: h.store.GetTestConcurrency(),
-		ProxyURL:        h.store.GetProxyURL(),
-		PgMaxConns:      h.pgMaxConns,
-		RedisPoolSize:   h.redisPoolSize,
+		MaxConcurrency:        h.store.GetMaxConcurrency(),
+		GlobalRPM:             h.rateLimiter.GetRPM(),
+		TestModel:             h.store.GetTestModel(),
+		TestConcurrency:       h.store.GetTestConcurrency(),
+		ProxyURL:              h.store.GetProxyURL(),
+		PgMaxConns:            h.pgMaxConns,
+		RedisPoolSize:         h.redisPoolSize,
+		AutoCleanUnauthorized: h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:  h.store.GetAutoCleanRateLimited(),
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
 	}
 
+	if h.store.GetAutoCleanUnauthorized() || h.store.GetAutoCleanRateLimited() {
+		h.store.TriggerAutoCleanupAsync()
+	}
+
 	c.JSON(http.StatusOK, settingsResponse{
-		MaxConcurrency:  h.store.GetMaxConcurrency(),
-		GlobalRPM:       h.rateLimiter.GetRPM(),
-		TestModel:       h.store.GetTestModel(),
-		TestConcurrency: h.store.GetTestConcurrency(),
-		ProxyURL:        h.store.GetProxyURL(),
-		PgMaxConns:      h.pgMaxConns,
-		RedisPoolSize:   h.redisPoolSize,
+		MaxConcurrency:        h.store.GetMaxConcurrency(),
+		GlobalRPM:             h.rateLimiter.GetRPM(),
+		TestModel:             h.store.GetTestModel(),
+		TestConcurrency:       h.store.GetTestConcurrency(),
+		ProxyURL:              h.store.GetProxyURL(),
+		PgMaxConns:            h.pgMaxConns,
+		RedisPoolSize:         h.redisPoolSize,
+		AutoCleanUnauthorized: h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:  h.store.GetAutoCleanRateLimited(),
 	})
 }
 
@@ -657,16 +681,7 @@ func (h *Handler) cleanByStatus(c *gin.Context, targetStatus string) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	accounts := h.store.Accounts()
-	cleaned := 0
-
-	for _, acc := range accounts {
-		if acc.RuntimeStatus() == targetStatus {
-			_ = h.db.SetError(ctx, acc.DBID, "deleted")
-			h.store.RemoveAccount(acc.DBID)
-			cleaned++
-		}
-	}
+	cleaned := h.store.CleanByRuntimeStatus(ctx, targetStatus)
 
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已清理 %d 个账号", cleaned), "cleaned": cleaned})
 }

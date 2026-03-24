@@ -30,10 +30,23 @@ function maskKey(key: string): string {
 }
 
 export default function Settings() {
+  const booleanOptions = [
+    { label: '关闭', value: 'false' },
+    { label: '开启', value: 'true' },
+  ]
   const [newKeyName, setNewKeyName] = useState('')
   const [newKeyValue, setNewKeyValue] = useState('')
   const [createdKey, setCreatedKey] = useState<string | null>(null)
-  const [settingsForm, setSettingsForm] = useState<SystemSettings>({ max_concurrency: 2, global_rpm: 0, test_model: '', test_concurrency: 50, pg_max_conns: 50, redis_pool_size: 30 })
+  const [settingsForm, setSettingsForm] = useState<SystemSettings>({
+    max_concurrency: 2,
+    global_rpm: 0,
+    test_model: '',
+    test_concurrency: 50,
+    pg_max_conns: 50,
+    redis_pool_size: 30,
+    auto_clean_unauthorized: false,
+    auto_clean_rate_limited: false,
+  })
   const [savingSettings, setSavingSettings] = useState(false)
   const [modelList, setModelList] = useState<string[]>([])
   const { toast, showToast } = useToast()
@@ -323,6 +336,31 @@ export default function Settings() {
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, redis_pool_size: parseInt(e.target.value) || 30 }))}
                 />
                 <p className="text-xs text-muted-foreground mt-1">Redis 连接池大小（范围 5~500，重启后生效）</p>
+              </div>
+            </div>
+            <h3 className="text-base font-semibold text-foreground mb-4 mt-6">自动清理监控</h3>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mb-4">
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">自动清理 401 账号</label>
+                <Select
+                  value={settingsForm.auto_clean_unauthorized ? 'true' : 'false'}
+                  onValueChange={(value) => setSettingsForm((f) => ({ ...f, auto_clean_unauthorized: value === 'true' }))}
+                  options={booleanOptions}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  开启后，后台每 30 秒巡检一次，发现运行时为 unauthorized 的账号会自动从号池中清理。
+                </p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">自动清理 429 账号</label>
+                <Select
+                  value={settingsForm.auto_clean_rate_limited ? 'true' : 'false'}
+                  onValueChange={(value) => setSettingsForm((f) => ({ ...f, auto_clean_rate_limited: value === 'true' }))}
+                  options={booleanOptions}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  开启后，后台每 30 秒巡检一次，发现运行时为 rate_limited 的账号会自动从号池中清理。
+                </p>
               </div>
             </div>
             <Button onClick={() => void handleSaveSettings()} disabled={savingSettings}>

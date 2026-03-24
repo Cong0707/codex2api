@@ -220,10 +220,14 @@ func (db *DB) migrate(ctx context.Context) error {
 		test_concurrency   INT DEFAULT 50,
 		proxy_url          VARCHAR(500) DEFAULT '',
 		pg_max_conns       INT DEFAULT 50,
-		redis_pool_size    INT DEFAULT 30
+		redis_pool_size    INT DEFAULT 30,
+		auto_clean_unauthorized BOOLEAN DEFAULT FALSE,
+		auto_clean_rate_limited BOOLEAN DEFAULT FALSE
 	);
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_clean_unauthorized BOOLEAN DEFAULT FALSE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_clean_rate_limited BOOLEAN DEFAULT FALSE;
 	`
 	_, err := db.conn.ExecContext(ctx, query)
 	return err
@@ -270,22 +274,28 @@ func (db *DB) InsertAPIKey(ctx context.Context, name, key string) (int64, error)
 
 // SystemSettings 运行时设置项
 type SystemSettings struct {
-	MaxConcurrency  int
-	GlobalRPM       int
-	TestModel       string
-	TestConcurrency int
-	ProxyURL        string
-	PgMaxConns      int
-	RedisPoolSize   int
+	MaxConcurrency        int
+	GlobalRPM             int
+	TestModel             string
+	TestConcurrency       int
+	ProxyURL              string
+	PgMaxConns            int
+	RedisPoolSize         int
+	AutoCleanUnauthorized bool
+	AutoCleanRateLimited  bool
 }
 
 // GetSystemSettings 加载全局设置
 func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 	s := &SystemSettings{}
 	err := db.conn.QueryRowContext(ctx, `
-		SELECT max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size
+		SELECT max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
+		       auto_clean_unauthorized, auto_clean_rate_limited
 		FROM system_settings WHERE id = 1
-	`).Scan(&s.MaxConcurrency, &s.GlobalRPM, &s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize)
+	`).Scan(
+		&s.MaxConcurrency, &s.GlobalRPM, &s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize,
+		&s.AutoCleanUnauthorized, &s.AutoCleanRateLimited,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -295,17 +305,22 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 // UpdateSystemSettings 更新全局设置（upsert：无行时自动插入）
 func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error {
 	_, err := db.conn.ExecContext(ctx, `
-		INSERT INTO system_settings (id, max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO system_settings (
+			id, max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
+			auto_clean_unauthorized, auto_clean_rate_limited
+		)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (id) DO UPDATE SET
-			max_concurrency  = EXCLUDED.max_concurrency,
-			global_rpm       = EXCLUDED.global_rpm,
-			test_model       = EXCLUDED.test_model,
-			test_concurrency = EXCLUDED.test_concurrency,
-			proxy_url        = EXCLUDED.proxy_url,
-			pg_max_conns     = EXCLUDED.pg_max_conns,
-			redis_pool_size  = EXCLUDED.redis_pool_size
-	`, s.MaxConcurrency, s.GlobalRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize)
+			max_concurrency         = EXCLUDED.max_concurrency,
+			global_rpm              = EXCLUDED.global_rpm,
+			test_model              = EXCLUDED.test_model,
+			test_concurrency        = EXCLUDED.test_concurrency,
+			proxy_url               = EXCLUDED.proxy_url,
+			pg_max_conns            = EXCLUDED.pg_max_conns,
+			redis_pool_size         = EXCLUDED.redis_pool_size,
+			auto_clean_unauthorized = EXCLUDED.auto_clean_unauthorized,
+			auto_clean_rate_limited = EXCLUDED.auto_clean_rate_limited
+	`, s.MaxConcurrency, s.GlobalRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize, s.AutoCleanUnauthorized, s.AutoCleanRateLimited)
 	return err
 }
 
