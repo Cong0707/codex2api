@@ -178,6 +178,7 @@ export default function Settings() {
   const isExternalDatabase = settingsForm.database_driver === 'postgres'
   const isExternalCache = settingsForm.cache_driver === 'redis'
   const showConnectionPool = isExternalDatabase || isExternalCache
+  const canConfigureRemoteMigration = settingsForm.admin_auth_source === 'env' || settingsForm.admin_secret.trim() !== ''
   return (
     <StateShell
       variant="page"
@@ -460,7 +461,14 @@ export default function Settings() {
                   placeholder={t('settings.adminSecretPlaceholder')}
                   value={settingsForm.admin_secret}
                   disabled={settingsForm.admin_auth_source === 'env'}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, admin_secret: e.target.value }))}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => {
+                    const nextSecret = e.target.value
+                    return {
+                      ...f,
+                      admin_secret: nextSecret,
+                      allow_remote_migration: nextSecret.trim() === '' ? false : f.allow_remote_migration,
+                    }
+                  })}
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.adminSecretDesc')}</p>
                 {settingsForm.admin_auth_source === 'env' ? (
@@ -471,10 +479,14 @@ export default function Settings() {
                 <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.allowRemoteMigration')}</label>
                 <Select
                   value={settingsForm.allow_remote_migration ? 'true' : 'false'}
+                  disabled={!canConfigureRemoteMigration}
                   onValueChange={(value) => setSettingsForm((f) => ({ ...f, allow_remote_migration: value === 'true' }))}
                   options={booleanOptions}
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.allowRemoteMigrationDesc')}</p>
+                {!canConfigureRemoteMigration ? (
+                  <p className="text-xs text-amber-600 mt-1">{t('settings.allowRemoteMigrationRequiresSecret')}</p>
+                ) : null}
               </div>
             </div>
             <Button onClick={() => void handleSaveSettings()} disabled={savingSettings}>

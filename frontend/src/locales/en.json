@@ -454,6 +454,7 @@
     "fastSchedulerEnabledDesc": "Uses an in-memory fast scheduling algorithm, significantly reducing dispatch latency under high concurrency. Recommended for large account pools (100+).",
     "allowRemoteMigration": "Allow Remote Migration",
     "allowRemoteMigrationDesc": "When enabled, other codex2api instances can pull healthy accounts from this instance.",
+    "allowRemoteMigrationRequiresSecret": "Set an admin secret first. Remote migration cannot be enabled without admin authentication.",
     "security": "Security",
     "adminSecret": "Admin Secret",
     "adminSecretPlaceholder": "Leave empty to disable admin auth",

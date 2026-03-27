@@ -459,6 +459,7 @@
     "fastSchedulerEnabledDesc": "启用后，账号选择将使用内存快速调度算法，大幅降低高并发场景下的调度延迟。适合大号池（100+ 账号）场景。",
     "allowRemoteMigration": "允许远程迁移",
     "allowRemoteMigrationDesc": "开启后，其他 codex2api 实例可通过导出接口拉取本实例的健康账号。",
+    "allowRemoteMigrationRequiresSecret": "请先设置管理密钥，未设置密码时不能启用远程迁移。",
     "security": "安全",
     "adminSecret": "管理密钥",
     "adminSecretPlaceholder": "留空则不启用管理接口鉴权",

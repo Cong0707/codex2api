@@ -158,6 +158,11 @@ func (h *Handler) resolveAdminSecret(ctx context.Context) (string, string) {
 	return settings.AdminSecret, "database"
 }
 
+func (h *Handler) hasConfiguredAdminSecret(ctx context.Context) bool {
+	adminSecret, _ := h.resolveAdminSecret(ctx)
+	return strings.TrimSpace(adminSecret) != ""
+}
+
 // ==================== Stats ====================
 
 // GetStats 获取仪表盘统计
@@ -1037,7 +1042,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		ProxyPoolEnabled:      h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:  h.store.FastSchedulerEnabled(),
 		MaxRetries:            h.store.GetMaxRetries(),
-		AllowRemoteMigration:  h.store.GetAllowRemoteMigration(),
+		AllowRemoteMigration:  h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
 		DatabaseDriver:        h.databaseDriver,
 		DatabaseLabel:         h.databaseLabel,
 		CacheDriver:           h.cacheDriver,
@@ -1052,6 +1057,20 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "请求格式错误")
 		return
 	}
+
+	currentAdminSecret := ""
+	if dbSettings, err := h.db.GetSystemSettings(c.Request.Context()); err == nil && dbSettings != nil {
+		currentAdminSecret = dbSettings.AdminSecret
+	}
+	if req.AdminSecret != nil {
+		if h.adminSecretEnv == "" {
+			currentAdminSecret = *req.AdminSecret
+			log.Printf("设置已更新: admin_secret (长度=%d)", len(currentAdminSecret))
+		} else {
+			log.Printf("检测到环境变量 ADMIN_SECRET，忽略前端提交的 admin_secret")
+		}
+	}
+	hasAdminSecret := strings.TrimSpace(currentAdminSecret) != "" || strings.TrimSpace(h.adminSecretEnv) != ""
 
 	if req.MaxConcurrency != nil {
 		v := *req.MaxConcurrency
@@ -1163,22 +1182,14 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 
 	if req.AllowRemoteMigration != nil {
+		if *req.AllowRemoteMigration && !hasAdminSecret {
+			writeError(c, http.StatusBadRequest, "请先设置管理密钥，再启用远程迁移")
+			return
+		}
 		h.store.SetAllowRemoteMigration(*req.AllowRemoteMigration)
 		log.Printf("设置已更新: allow_remote_migration = %t", *req.AllowRemoteMigration)
-	}
-
-	// 读取当前 admin_secret（如有更新则使用新值）
-	currentAdminSecret := ""
-	if dbSettings, err := h.db.GetSystemSettings(c.Request.Context()); err == nil && dbSettings != nil {
-		currentAdminSecret = dbSettings.AdminSecret
-	}
-	if req.AdminSecret != nil {
-		if h.adminSecretEnv == "" {
-			currentAdminSecret = *req.AdminSecret
-			log.Printf("设置已更新: admin_secret (长度=%d)", len(currentAdminSecret))
-		} else {
-			log.Printf("检测到环境变量 ADMIN_SECRET，忽略前端提交的 admin_secret")
-		}
+	} else if !hasAdminSecret {
+		h.store.SetAllowRemoteMigration(false)
 	}
 
 	// 持久化保存到数据库
@@ -1197,7 +1208,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ProxyPoolEnabled:      h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:  h.store.FastSchedulerEnabled(),
 		MaxRetries:            h.store.GetMaxRetries(),
-		AllowRemoteMigration:  h.store.GetAllowRemoteMigration(),
+		AllowRemoteMigration:  h.store.GetAllowRemoteMigration() && hasAdminSecret,
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
@@ -1232,7 +1243,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ProxyPoolEnabled:      h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:  h.store.FastSchedulerEnabled(),
 		MaxRetries:            h.store.GetMaxRetries(),
-		AllowRemoteMigration:  h.store.GetAllowRemoteMigration(),
+		AllowRemoteMigration:  h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
 		DatabaseDriver:        h.databaseDriver,
 		DatabaseLabel:         h.databaseLabel,
 		CacheDriver:           h.cacheDriver,
@@ -1260,9 +1271,15 @@ func (h *Handler) ExportAccounts(c *gin.Context) {
 	remote := c.Query("remote")
 
 	// 远程调用需检查 allow_remote_migration
-	if remote == "true" && !h.store.GetAllowRemoteMigration() {
-		writeError(c, http.StatusForbidden, "远程迁移未启用，请在系统设置中开启")
-		return
+	if remote == "true" {
+		if !h.hasConfiguredAdminSecret(c.Request.Context()) {
+			writeError(c, http.StatusForbidden, "请先设置管理密钥，再启用远程迁移")
+			return
+		}
+		if !h.store.GetAllowRemoteMigration() {
+			writeError(c, http.StatusForbidden, "远程迁移未启用，请在系统设置中开启")
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
@@ -1333,6 +1350,11 @@ type migrateReq struct {
 
 // MigrateAccounts 从远程 codex2api 实例迁移健康账号
 func (h *Handler) MigrateAccounts(c *gin.Context) {
+	if !h.hasConfiguredAdminSecret(c.Request.Context()) {
+		writeError(c, http.StatusForbidden, "请先设置管理密钥，再使用远程迁移")
+		return
+	}
+
 	var req migrateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		writeError(c, http.StatusBadRequest, "请求格式错误")
