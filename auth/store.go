@@ -1708,6 +1708,10 @@ func (s *Store) CleanExpiredAccounts(ctx context.Context, maxAge time.Duration) 
 		if atomic.LoadInt64(&acc.ActiveRequests) > 0 {
 			continue
 		}
+		// 成功请求超过 10 次的账号保留，不做过期清理
+		if atomic.LoadInt64(&acc.TotalRequests) > 10 {
+			continue
+		}
 		expiredIDs = append(expiredIDs, acc.DBID)
 	}
 
