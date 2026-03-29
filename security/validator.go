@@ -26,7 +26,7 @@ var (
 		regexp.MustCompile(`(?i)<script[^>]*>[\s\S]*?</script>`),
 		regexp.MustCompile(`(?i)javascript:\s*`),
 		regexp.MustCompile(`(?i)on\w+\s*=\s*["'][^"']*["']`),
-		regexp.MustCompile(`(?i)<iframe[^>]*>[\s\S]*?</iframe>`),
+		regexp.MustCompile(`(?i)<iframe[^>]*>`), // 匹配任何 iframe 标签开始
 		regexp.MustCompile(`(?i)<object[^>]*>[\s\S]*?</object>`),
 		regexp.MustCompile(`(?i)<embed[^>]*>`),
 		regexp.MustCompile(`(?i)data:\s*text/html`),
@@ -54,7 +54,7 @@ var (
 		regexp.MustCompile(`(?i)(["']?api[_-]?key["']?\s*[:=]\s*["']?)([^"'\s&]+)`),
 		regexp.MustCompile(`(?i)(["']?secret["']?\s*[:=]\s*["']?)([^"'\s&]+)`),
 		regexp.MustCompile(`(?i)(["']?password["']?\s*[:=]\s*["']?)([^"'\s&]+)`),
-		regexp.MustCompile(`(sk-[a-zA-Z0-9]{24,})`),
+		regexp.MustCompile(`(?i)(sk-)([a-zA-Z0-9]{20,})`), // sk- 前缀单独作为组1
 	}
 )
 
