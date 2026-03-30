@@ -1254,6 +1254,28 @@ func parseRetryAfter(body []byte) time.Duration {
 func (h *Handler) applyCooldown(account *auth.Account, statusCode int, body []byte, resp *http.Response) {
 	switch statusCode {
 	case http.StatusTooManyRequests:
+		now := time.Now()
+		if details, ok := parseUsageLimitDetails(body); ok {
+			var until time.Time
+			if details.resetsAt > 0 {
+				until = time.Unix(details.resetsAt, 0)
+			} else if details.resetsInSeconds > 0 {
+				until = now.Add(time.Duration(details.resetsInSeconds) * time.Second)
+			}
+			if until.After(now) {
+				h.store.MarkCooldown(account, until.Sub(now), "full_usage")
+				log.Printf("账号 %d 命中 usage_limit_reached，进入满额度等待至 %s", account.ID(), until.Format(time.RFC3339))
+				return
+			}
+		}
+		if h.store.MarkFullUsageCooldownFromSnapshot(account) {
+			if until, _, active := account.GetCooldownSnapshot(); active {
+				log.Printf("账号 %d 用量已满，进入等待模式至 %s", account.ID(), until.Format(time.RFC3339))
+			} else {
+				log.Printf("账号 %d 用量已满，进入等待模式", account.ID())
+			}
+			return
+		}
 		cooldown := auth.RateLimitedProbeInterval
 		log.Printf("账号 %d 被限速 (plan=%s)，进入等待模式 %v（2小时测活一次）", account.ID(), account.GetPlanType(), cooldown)
 		h.store.MarkCooldown(account, cooldown, "rate_limited")

@@ -53,6 +53,17 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 		return nil
 	case http.StatusTooManyRequests:
 		h.store.ReportRequestFailure(account, "client", 0)
+		if _, cooldownReason, _ := account.GetCooldownSnapshot(); cooldownReason == "full_usage" {
+			if h.store.MarkFullUsageCooldownFromSnapshot(account) {
+				return nil
+			}
+			// 没有可用 reset 时间时，至少再等待一个测活周期
+			h.store.MarkCooldown(account, auth.FullUsageProbeInterval, "full_usage")
+			return nil
+		}
+		if h.store.MarkFullUsageCooldownFromSnapshot(account) {
+			return nil
+		}
 		h.store.ExtendRateLimitedCooldown(account, auth.RateLimitedProbeInterval)
 		return nil
 	default:

@@ -88,7 +88,9 @@ func (h *Handler) TestConnection(c *gin.Context) {
 		case http.StatusUnauthorized:
 			h.store.MarkCooldown(account, 24*time.Hour, "unauthorized")
 		case http.StatusTooManyRequests:
-			h.store.MarkCooldown(account, auth.RateLimitedProbeInterval, "rate_limited")
+			if !h.store.MarkFullUsageCooldownFromSnapshot(account) {
+				h.store.MarkCooldown(account, auth.RateLimitedProbeInterval, "rate_limited")
+			}
 		}
 		errBody, _ := io.ReadAll(resp.Body)
 		sendTestEvent(c, testEvent{Type: "error", Error: fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(errBody), 500))})
@@ -247,7 +249,9 @@ func (h *Handler) BatchTest(c *gin.Context) {
 				if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, acc); ok {
 					h.store.PersistUsageSnapshot(acc, usagePct)
 				}
-				h.store.MarkCooldown(acc, auth.RateLimitedProbeInterval, "rate_limited")
+				if !h.store.MarkFullUsageCooldownFromSnapshot(acc) {
+					h.store.MarkCooldown(acc, auth.RateLimitedProbeInterval, "rate_limited")
+				}
 				atomic.AddInt64(&rateLimitCount, 1)
 			default:
 				atomic.AddInt64(&failedCount, 1)

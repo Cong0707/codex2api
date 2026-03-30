@@ -59,8 +59,12 @@ function formatWaitPoint(dateStr?: string): string {
     minute: '2-digit',
     hour12: false,
   })
-  // 输出示例: 04-06 20:33
-  return fmt.format(date)
+  const parts = fmt.formatToParts(date)
+  const month = parts.find((part) => part.type === 'month')?.value ?? '00'
+  const day = parts.find((part) => part.type === 'day')?.value ?? '00'
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00'
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '00'
+  return `${month}-${day} ${hour}:${minute}`
 }
 
 export default function Accounts() {

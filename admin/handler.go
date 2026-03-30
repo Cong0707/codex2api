@@ -405,7 +405,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 					}
 				}
 			}
-		} else if row.CooldownUntil.Valid && row.CooldownUntil.Time.After(now) && row.CooldownReason != "unauthorized" {
+		} else if row.CooldownReason != "unauthorized" && ((row.CooldownReason == "rate_limited" && row.CooldownUntil.Valid) || (row.CooldownUntil.Valid && row.CooldownUntil.Time.After(now))) {
 			// 兜底：账号不在运行时内存池时，使用数据库冷却信息回填等待态
 			resp.WaitMode = true
 			reason := strings.TrimSpace(row.CooldownReason)
@@ -413,9 +413,15 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 				reason = "cooldown"
 			}
 			resp.WaitReason = reason
-			resp.WaitUntil = row.CooldownUntil.Time.Format(time.RFC3339)
-			resp.WaitRemainingSec = int64(row.CooldownUntil.Time.Sub(now).Seconds())
-			resp.WaitProbeAt = row.CooldownUntil.Time.Format(time.RFC3339)
+			waitUntil := row.CooldownUntil.Time
+			if reason == "rate_limited" && !waitUntil.After(now) {
+				waitUntil = now
+			}
+			resp.WaitUntil = waitUntil.Format(time.RFC3339)
+			if waitUntil.After(now) {
+				resp.WaitRemainingSec = int64(waitUntil.Sub(now).Seconds())
+			}
+			resp.WaitProbeAt = waitUntil.Format(time.RFC3339)
 			resp.WaitProbeRemaining = resp.WaitRemainingSec
 			if resp.Status == "active" || resp.Status == "ready" {
 				resp.Status = reason

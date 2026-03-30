@@ -1141,8 +1141,13 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 			}
 		}
 		if row.CooldownUntil.Valid {
-			if time.Now().Before(row.CooldownUntil.Time) {
+			now := time.Now()
+			if now.Before(row.CooldownUntil.Time) {
 				account.SetCooldownUntil(row.CooldownUntil.Time, row.CooldownReason)
+			} else if row.CooldownReason == "rate_limited" {
+				// rate_limited 需要测活成功后才放出，重启后也保持等待态
+				account.SetCooldownUntil(row.CooldownUntil.Time, row.CooldownReason)
+				account.LastRateLimitedProbeAt = now
 			} else if row.CooldownReason != "" {
 				if err := s.db.ClearCooldown(ctx, row.ID); err != nil {
 					log.Printf("[账号 %d] 清理过期冷却状态失败: %v", row.ID, err)
@@ -1820,6 +1825,48 @@ func (s *Store) WaitRateLimitedAccounts(ctx context.Context, minWait time.Durati
 	return waited
 }
 
+func (s *Store) resolveFullUsageWaitUntil(acc *Account, now time.Time) (time.Time, bool) {
+	if acc == nil {
+		return time.Time{}, false
+	}
+
+	var until time.Time
+	appendUntil := func(candidate time.Time) {
+		if candidate.IsZero() || !candidate.After(now) {
+			return
+		}
+		if until.IsZero() || candidate.After(until) {
+			until = candidate
+		}
+	}
+
+	if pct7d, ok := acc.GetUsagePercent7d(); ok && pct7d >= 100.0 {
+		appendUntil(acc.GetReset7dAt())
+	}
+	if pct5h, ok := acc.GetUsagePercent5h(); ok && pct5h >= 100.0 {
+		appendUntil(acc.GetReset5hAt())
+	}
+
+	if until.IsZero() {
+		return time.Time{}, false
+	}
+	return until, true
+}
+
+// MarkFullUsageCooldownFromSnapshot 若账号用量已满，则按额度恢复时间打 full_usage 等待
+func (s *Store) MarkFullUsageCooldownFromSnapshot(acc *Account) bool {
+	now := time.Now()
+	if until, ok := s.resolveFullUsageWaitUntil(acc, now); ok {
+		waitDuration := until.Sub(now)
+		if waitDuration < time.Minute {
+			waitDuration = time.Minute
+		}
+		s.MarkCooldown(acc, waitDuration, "full_usage")
+		return true
+	}
+	return false
+}
+
 // WaitFullUsageAccounts 将用量 >= 100% 的账号切换为等待模式（冷却到重置时间）
 func (s *Store) WaitFullUsageAccounts(ctx context.Context) int {
 	accounts := s.Accounts()
@@ -1845,8 +1892,9 @@ func (s *Store) WaitFullUsageAccounts(ctx context.Context) int {
 			continue
 		}
 
-		pct, valid := acc.GetUsagePercent7d()
-		if !valid || pct < 100.0 {
+		pct7d, valid7d := acc.GetUsagePercent7d()
+		pct5h, valid5h := acc.GetUsagePercent5h()
+		if !(valid7d && pct7d >= 100.0) && !(valid5h && pct5h >= 100.0) {
 			continue
 		}
 
@@ -1855,21 +1903,15 @@ func (s *Store) WaitFullUsageAccounts(ctx context.Context) int {
 			continue
 		}
 
-		waitUntil := now.Add(fullUsageWaitFallback)
-		if resetAt := acc.GetReset7dAt(); !resetAt.IsZero() && resetAt.After(now) {
-			waitUntil = resetAt
+		waitUntil, ok := s.resolveFullUsageWaitUntil(acc, now)
+		if !ok {
+			waitUntil = now.Add(fullUsageWaitFallback)
 		}
-
-		waitDuration := waitUntil.Sub(time.Now())
-		if waitDuration < time.Minute {
-			waitDuration = time.Minute
-		}
-
-		s.MarkCooldown(acc, waitDuration, "full_usage")
+		s.MarkCooldown(acc, waitUntil.Sub(time.Now()), "full_usage")
 		if s.db != nil {
 			s.db.InsertAccountEventAsync(acc.DBID, "cooldown", "full_usage_wait")
 		}
-		log.Printf("[账号 %d] 用量 %.1f%% 已满，进入等待模式至 %s (email=%s)", acc.DBID, pct, waitUntil.Format(time.RFC3339), acc.Email)
+		log.Printf("[账号 %d] 用量已满 (7d=%.1f%%,5h=%.1f%%)，进入等待模式至 %s (email=%s)", acc.DBID, pct7d, pct5h, waitUntil.Format(time.RFC3339), acc.Email)
 		waited++
 	}
 
@@ -2210,7 +2252,7 @@ func (s *Store) parallelRefreshAll(ctx context.Context) {
 		if acc.IsBanned() {
 			continue
 		}
-		if acc.HasActiveCooldown() {
+		if _, reason, active := acc.GetCooldownSnapshot(); active || reason == "rate_limited" {
 			continue
 		}
 		// AT-only 账号无 RT，无法刷新
@@ -2248,8 +2290,9 @@ func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 	dbID := acc.DBID
 	cooldownUntil := acc.CooldownUtil
 	cooldownReason := acc.CooldownReason
-	activeCooldown := acc.Status == StatusCooldown && time.Now().Before(acc.CooldownUtil)
-	expiredCooldown := acc.Status == StatusCooldown && !time.Now().Before(acc.CooldownUtil)
+	rateLimitedHold := acc.Status == StatusCooldown && cooldownReason == "rate_limited"
+	activeCooldown := acc.Status == StatusCooldown && (time.Now().Before(acc.CooldownUtil) || rateLimitedHold)
+	expiredCooldown := acc.Status == StatusCooldown && !time.Now().Before(acc.CooldownUtil) && !rateLimitedHold
 	acc.mu.RUnlock()
 
 	// 1. 尝试从缓存读取 AT
