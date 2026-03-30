@@ -616,10 +616,9 @@ type importToken struct {
 	name         string
 }
 
-// jsonAccountEntry CLIProxyAPI 凭证 JSON 条目
-type jsonAccountEntry struct {
-	RefreshToken string `json:"refresh_token"`
-	Email        string `json:"email"`
+type importAccountItem struct {
+	name  string
+	entry compatEntry
 }
 
 // ImportAccounts 批量导入账号（支持 TXT / JSON）
@@ -691,7 +690,7 @@ func (h *Handler) importAccountsJSON(c *gin.Context, proxyURL string) {
 		return
 	}
 
-	var allTokens []importToken
+	var items []importAccountItem
 
 	for _, fh := range files {
 		if fh.Size > 2*1024*1024 {
@@ -714,35 +713,51 @@ func (h *Handler) importAccountsJSON(c *gin.Context, proxyURL string) {
 		// 去除 UTF-8 BOM
 		data = []byte(strings.TrimPrefix(string(data), "\xef\xbb\xbf"))
 
-		// 尝试解析为数组，失败则尝试单对象
-		var entries []jsonAccountEntry
-		if err := json.Unmarshal(data, &entries); err != nil {
-			var single jsonAccountEntry
-			if err := json.Unmarshal(data, &single); err != nil {
-				writeError(c, http.StatusBadRequest, fmt.Sprintf("文件 %s 不是有效的 JSON 格式", fh.Filename))
-				return
-			}
-			entries = []jsonAccountEntry{single}
+		entries, err := parseCompatEntries(data)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("文件 %s 不是有效的 JSON 格式", fh.Filename))
+			return
 		}
 
-		for _, entry := range entries {
-			rt := strings.TrimSpace(entry.RefreshToken)
-			if rt == "" {
+		for idx, entry := range entries {
+			parsed := parseCompatEntry(entry)
+			if parsed.refreshToken == "" && parsed.accessToken == "" {
 				continue
 			}
-			allTokens = append(allTokens, importToken{
-				refreshToken: rt,
-				name:         strings.TrimSpace(entry.Email),
-			})
+			if proxyURL != "" {
+				parsed.proxyURL = proxyURL
+			}
+			name := buildImportName(fh.Filename, parsed.email, idx, len(entries))
+			items = append(items, importAccountItem{name: name, entry: parsed})
 		}
 	}
 
-	if len(allTokens) == 0 {
-		writeError(c, http.StatusBadRequest, "JSON 文件中未找到有效的 refresh_token")
+	if len(items) == 0 {
+		writeError(c, http.StatusBadRequest, "JSON 文件中未找到有效的 refresh_token 或 access_token")
 		return
 	}
 
-	h.importAccountsCommon(c, allTokens, proxyURL)
+	h.importMixedAccountsCommon(c, items, "import")
+}
+
+func buildImportName(fileName, email string, idx, total int) string {
+	name := strings.TrimSpace(security.SanitizeInput(email))
+	if name == "" {
+		clean := strings.TrimSpace(security.SanitizeInput(fileName))
+		if clean != "" {
+			if dot := strings.LastIndex(clean, "."); dot > 0 {
+				clean = clean[:dot]
+			}
+			name = clean
+		}
+	}
+	if name == "" {
+		name = fmt.Sprintf("import-%d", time.Now().UnixNano())
+	}
+	if total > 1 {
+		name = fmt.Sprintf("%s-%d", name, idx+1)
+	}
+	return name
 }
 
 // importEvent SSE 导入进度事件
@@ -894,6 +909,226 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 	close(done)
 
 	// 发送完成事件
+	suc := int(atomic.LoadInt64(&successCount))
+	fai := int(atomic.LoadInt64(&failCount))
+	sendImportEvent(c, importEvent{
+		Type: "complete", Current: total, Total: total,
+		Success: suc, Duplicate: duplicateCount, Failed: fai,
+	})
+
+	log.Printf("导入完成: success=%d, duplicate=%d, failed=%d, total=%d", suc, duplicateCount, fai, total)
+}
+
+func (h *Handler) importMixedAccountsCommon(c *gin.Context, items []importAccountItem, source string) {
+	// 文件内去重
+	seenRT := make(map[string]bool)
+	seenAT := make(map[string]bool)
+	var unique []importAccountItem
+	for _, item := range items {
+		rt := strings.TrimSpace(item.entry.refreshToken)
+		at := strings.TrimSpace(item.entry.accessToken)
+		if rt == "" && at == "" {
+			continue
+		}
+		if rt != "" {
+			if seenRT[rt] {
+				continue
+			}
+			seenRT[rt] = true
+		} else if at != "" {
+			if seenAT[at] {
+				continue
+			}
+			seenAT[at] = true
+		}
+		unique = append(unique, item)
+	}
+
+	total := len(unique)
+	if total == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"message":   "没有可导入账号",
+			"success":   0,
+			"duplicate": 0,
+			"failed":    0,
+			"total":     0,
+		})
+		return
+	}
+
+	// 数据库去重（独立短超时）
+	dedupeCtx, dedupeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dedupeCancel()
+	existingRTs, err := h.db.GetAllRefreshTokens(dedupeCtx)
+	if err != nil {
+		log.Printf("查询已有 RT 失败: %v", err)
+		existingRTs = make(map[string]bool)
+	}
+	existingATs, err := h.db.GetAllAccessTokens(dedupeCtx)
+	if err != nil {
+		log.Printf("查询已有 AT 失败: %v", err)
+		existingATs = make(map[string]bool)
+	}
+
+	var newItems []importAccountItem
+	duplicateCount := 0
+	for _, item := range unique {
+		rt := strings.TrimSpace(item.entry.refreshToken)
+		at := strings.TrimSpace(item.entry.accessToken)
+		if rt != "" {
+			if existingRTs[rt] {
+				duplicateCount++
+				continue
+			}
+		} else if at != "" {
+			if existingATs[at] {
+				duplicateCount++
+				continue
+			}
+		}
+		newItems = append(newItems, item)
+	}
+
+	if len(newItems) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"message":   fmt.Sprintf("所有 %d 个账号已存在，无需导入", total),
+			"success":   0,
+			"duplicate": duplicateCount,
+			"failed":    0,
+			"total":     total,
+		})
+		return
+	}
+
+	// 切换到 SSE 流式响应
+	setupSSE(c)
+
+	var successCount int64
+	var failCount int64
+	var current int64
+	sem := make(chan struct{}, 20)
+	var wg sync.WaitGroup
+
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				cur := int(atomic.LoadInt64(&current))
+				suc := int(atomic.LoadInt64(&successCount))
+				fai := int(atomic.LoadInt64(&failCount))
+				sendImportEvent(c, importEvent{
+					Type: "progress", Current: cur + duplicateCount, Total: total,
+					Success: suc, Duplicate: duplicateCount, Failed: fai,
+				})
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	for i, item := range newItems {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(idx int, it importAccountItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			name := strings.TrimSpace(it.name)
+			if name == "" {
+				name = fmt.Sprintf("import-%d", idx+1)
+			}
+
+			rt := strings.TrimSpace(it.entry.refreshToken)
+			at := strings.TrimSpace(it.entry.accessToken)
+
+			insertCtx, insertCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			var id int64
+			var err error
+			if rt != "" {
+				id, err = h.db.InsertAccount(insertCtx, name, rt, it.entry.proxyURL)
+			} else {
+				id, err = h.db.InsertATAccount(insertCtx, name, at, it.entry.proxyURL)
+			}
+
+			if err != nil {
+				insertCancel()
+				log.Printf("导入账号 %d/%d 失败: %v", idx+1, len(newItems), err)
+				atomic.AddInt64(&failCount, 1)
+				atomic.AddInt64(&current, 1)
+				return
+			}
+
+			creds := map[string]interface{}{}
+			if rt != "" {
+				creds["refresh_token"] = rt
+			}
+			if at != "" {
+				creds["access_token"] = at
+			}
+			if it.entry.idToken != "" {
+				creds["id_token"] = it.entry.idToken
+			}
+			if it.entry.email != "" {
+				creds["email"] = it.entry.email
+			}
+			if it.entry.accountID != "" {
+				creds["account_id"] = it.entry.accountID
+			}
+			if it.entry.planType != "" {
+				creds["plan_type"] = it.entry.planType
+			}
+			if !it.entry.expiresAt.IsZero() {
+				creds["expires_at"] = it.entry.expiresAt.Format(time.RFC3339)
+			} else if it.entry.expiresRaw != "" {
+				creds["expires_at"] = it.entry.expiresRaw
+			}
+			if len(creds) > 0 {
+				if err := h.db.UpdateCredentials(insertCtx, id, creds); err != nil {
+					log.Printf("导入账号 %d 更新 credentials 失败: %v", idx+1, err)
+				}
+			}
+			insertCancel()
+
+			acc := &auth.Account{
+				DBID:         id,
+				RefreshToken: rt,
+				AccessToken:  at,
+				AccountID:    it.entry.accountID,
+				Email:        it.entry.email,
+				PlanType:     it.entry.planType,
+				ProxyURL:     it.entry.proxyURL,
+			}
+			if !it.entry.expiresAt.IsZero() {
+				acc.ExpiresAt = it.entry.expiresAt
+			} else if at != "" {
+				acc.ExpiresAt = time.Now().Add(1 * time.Hour)
+			}
+			h.store.AddAccount(acc)
+			h.db.InsertAccountEventAsync(id, "added", source)
+
+			atomic.AddInt64(&successCount, 1)
+			atomic.AddInt64(&current, 1)
+
+			if rt != "" && at == "" {
+				go func(accountID int64) {
+					refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := h.store.RefreshSingle(refreshCtx, accountID); err != nil {
+						log.Printf("导入账号 %d 刷新失败: %v", accountID, err)
+					} else {
+						log.Printf("导入账号 %d 刷新成功", accountID)
+					}
+				}(id)
+			}
+		}(i, item)
+	}
+
+	wg.Wait()
+	close(done)
+
 	suc := int(atomic.LoadInt64(&successCount))
 	fai := int(atomic.LoadInt64(&failCount))
 	sendImportEvent(c, importEvent{
