@@ -242,6 +242,23 @@ func schedulerLatency(totalDurationMs, firstTokenMs int) time.Duration {
 	return 0
 }
 
+func isWebsocketUpgrade(headers http.Header) bool {
+	if headers == nil {
+		return false
+	}
+	connection := strings.ToLower(strings.TrimSpace(headers.Get("Connection")))
+	upgrade := strings.ToLower(strings.TrimSpace(headers.Get("Upgrade")))
+	return strings.Contains(connection, "upgrade") && upgrade == "websocket"
+}
+
+func shouldUseWebsocketTransport(cfg *config.Config, req *http.Request) bool {
+	if cfg == nil || !cfg.UseWebsocket || req == nil {
+		return false
+	}
+	// 对齐 CPA：仅在下游就是 websocket 传输时才走 websocket 上游链路。
+	return isWebsocketUpgrade(req.Header)
+}
+
 // RegisterRoutes 注册路由
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	v1 := r.Group("/v1")
@@ -475,7 +492,7 @@ func (h *Handler) Responses(c *gin.Context) {
 
 		start := time.Now()
 		proxyURL := h.store.NextProxy()
-		useWebsocket := h.cfg != nil && h.cfg.UseWebsocket
+		useWebsocket := shouldUseWebsocketTransport(h.cfg, c.Request)
 
 		// 提取 API Key 用于设备指纹稳定化
 		apiKey := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
@@ -839,7 +856,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 
 		start := time.Now()
 		proxyURL := h.store.NextProxy()
-		useWebsocket := h.cfg != nil && h.cfg.UseWebsocket
+		useWebsocket := shouldUseWebsocketTransport(h.cfg, c.Request)
 
 		// 提取 API Key 用于设备指纹稳定化
 		apiKey := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
