@@ -43,7 +43,6 @@ func NewUTLSTransport(proxyURL string) http.RoundTripper {
 	if proxyURL != "" {
 		d, err := buildProxyDialer(proxyURL)
 		if err != nil {
-			// 代理配置失败时回退到直连
 			log.Printf("[UTLS] 代理配置失败，回退直连: proxy=%s err=%v", proxyURL, err)
 			dialer = xproxy.Direct
 		} else {
@@ -83,18 +82,21 @@ func buildProxyDialer(proxyURL string) (xproxy.Dialer, error) {
 	}
 }
 
-// httpConnectDialer 通过 HTTP CONNECT 方法建立隧道的拨号器。
+// httpConnectDialer 通过 HTTP CONNECT 方法建立隧道的拨号器
 type httpConnectDialer struct {
-	proxyAddr  string
-	authHeader string
+	proxyAddr  string // 代理服务器地址（host:port）
+	authHeader string // Proxy-Authorization 头（可选）
 }
 
+// Dial 通过 HTTP CONNECT 隧道连接到目标地址
 func (d *httpConnectDialer) Dial(network, addr string) (net.Conn, error) {
-	conn, err := net.DialTimeout(network, d.proxyAddr, 10*time.Second)
+	// 1. 建立到代理服务器的 TCP 连接
+	conn, err := net.DialTimeout("tcp", d.proxyAddr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("连接代理服务器失败: %w", err)
 	}
 
+	// 2. 发送 CONNECT 请求建立隧道
 	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", addr, addr)
 	if d.authHeader != "" {
 		connectReq += fmt.Sprintf("Proxy-Authorization: %s\r\n", d.authHeader)
@@ -106,6 +108,7 @@ func (d *httpConnectDialer) Dial(network, addr string) (net.Conn, error) {
 		return nil, fmt.Errorf("发送 CONNECT 请求失败: %w", err)
 	}
 
+	// 3. 读取代理响应
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
@@ -118,12 +121,14 @@ func (d *httpConnectDialer) Dial(network, addr string) (net.Conn, error) {
 		return nil, fmt.Errorf("代理 CONNECT 失败 (status %d)", resp.StatusCode)
 	}
 
+	// bufio.Reader 可能缓冲了响应之后的字节，需要包装确保后续读取不丢失
 	if br.Buffered() > 0 {
 		return &bufferedConn{Conn: conn, reader: br}, nil
 	}
 	return conn, nil
 }
 
+// bufferedConn 包装 net.Conn，优先读取 bufio.Reader 中的缓冲数据
 type bufferedConn struct {
 	net.Conn
 	reader *bufio.Reader
@@ -145,6 +150,7 @@ func buildHTTPProxyDialer(u *url.URL) (xproxy.Dialer, error) {
 	}
 
 	d := &httpConnectDialer{proxyAddr: addr}
+	// 处理代理认证
 	if u.User != nil {
 		username := u.User.Username()
 		password, _ := u.User.Password()
