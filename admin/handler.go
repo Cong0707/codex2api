@@ -312,8 +312,14 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 		accountMap[acc.DBID] = acc
 	}
 
-	// 获取每账号的请求统计
-	reqCounts, _ := h.db.GetAccountRequestCounts(ctx)
+	// 获取每账号的请求统计（单独超时，避免被前面的查询挤占时间）
+	reqCountCtx, reqCountCancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer reqCountCancel()
+	reqCounts, err := h.db.GetAccountRequestCounts(reqCountCtx)
+	if err != nil {
+		log.Printf("获取账号请求统计失败: %v", err)
+		reqCounts = make(map[int64]*database.AccountRequestCount)
+	}
 
 	accounts := make([]accountResponse, 0, len(rows))
 	for _, row := range rows {
