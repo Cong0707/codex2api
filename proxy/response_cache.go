@@ -17,9 +17,13 @@ import (
 // 自动将历史 items 注入回 input，使上游无需依赖服务端存储即可匹配 call_id。
 
 const (
-	responseCacheTTL      = 10 * time.Minute
-	responseCacheMaxItems = 10000 // 增加缓存条目数以提高命中率
-	responseCleanupInterval = 2 * time.Minute // 增加清理间隔以减少锁竞争
+	responseCacheTTL           = 10 * time.Minute
+	responseCacheMaxItems      = 10000           // 增加缓存条目数以提高命中率
+	responseCleanupInterval    = 2 * time.Minute // 增加清理间隔以减少锁竞争
+	responseCacheStoredItems   = 120
+	responseCacheStoredMaxSize = 512 * 1024
+	responseCacheInjectItems   = 40
+	responseCacheInjectMaxSize = 192 * 1024
 )
 
 type responseCacheEntry struct {
@@ -35,6 +39,46 @@ var respCache struct {
 func init() {
 	respCache.store = make(map[string]*responseCacheEntry)
 	go respCacheCleanupLoop()
+}
+
+func trimRawItemsTail(items []json.RawMessage, maxItems, maxBytes int) []json.RawMessage {
+	if len(items) == 0 {
+		return nil
+	}
+	if maxItems <= 0 {
+		maxItems = len(items)
+	}
+	if maxItems > len(items) {
+		maxItems = len(items)
+	}
+
+	subset := items[len(items)-maxItems:]
+
+	if maxBytes > 0 {
+		total := 0
+		start := len(subset)
+		for i := len(subset) - 1; i >= 0; i-- {
+			size := len(subset[i])
+			if total > 0 && total+size > maxBytes {
+				break
+			}
+			if total == 0 && size > maxBytes {
+				start = i
+				break
+			}
+			total += size
+			start = i
+		}
+		subset = subset[start:]
+	}
+
+	out := make([]json.RawMessage, len(subset))
+	for i := range subset {
+		dup := make([]byte, len(subset[i]))
+		copy(dup, subset[i])
+		out[i] = json.RawMessage(dup)
+	}
+	return out
 }
 
 // setResponseCache 存储响应上下文
@@ -53,9 +97,11 @@ func setResponseCache(responseID string, items []json.RawMessage) {
 		}
 	}
 
-	// 复制 items 避免外部修改
-	itemsCopy := make([]json.RawMessage, len(items))
-	copy(itemsCopy, items)
+	itemsCopy := trimRawItemsTail(items, responseCacheStoredItems, responseCacheStoredMaxSize)
+	if len(itemsCopy) == 0 {
+		respCache.mu.Unlock()
+		return
+	}
 
 	respCache.store[responseID] = &responseCacheEntry{
 		items:     itemsCopy,
@@ -119,6 +165,10 @@ func expandPreviousResponse(codexBody []byte) ([]byte, string) {
 	cached := getResponseCache(prevID)
 	if cached == nil {
 		// 缓存未命中（首次请求 / 过期 / 其他实例），无法展开，按原样继续
+		return codexBody, prevID
+	}
+	cached = trimRawItemsTail(cached, responseCacheInjectItems, responseCacheInjectMaxSize)
+	if len(cached) == 0 {
 		return codexBody, prevID
 	}
 
