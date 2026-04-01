@@ -507,7 +507,7 @@ func (db *DB) getAccountEventTrendSQLite(ctx context.Context, start, end time.Ti
 	}
 
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT created_at, event_type FROM account_events WHERE created_at >= $1 AND created_at <= $2`,
+		`SELECT created_at, event_type, source FROM account_events WHERE created_at >= $1 AND created_at <= $2`,
 		start, end,
 	)
 	if err != nil {
@@ -523,12 +523,17 @@ func (db *DB) getAccountEventTrendSQLite(ctx context.Context, start, end time.Ti
 
 	for rows.Next() {
 		var createdRaw interface{}
-		var eventType string
-		if err := rows.Scan(&createdRaw, &eventType); err != nil {
+		var eventType, source string
+		if err := rows.Scan(&createdRaw, &eventType, &source); err != nil {
 			return nil, err
 		}
 		createdAt, err := parseDBTimeValue(createdRaw)
 		if err != nil || createdAt.IsZero() {
+			continue
+		}
+
+		// 只统计用户操作：added 全部计入，deleted 只计 manual
+		if eventType == "deleted" && source != "manual" {
 			continue
 		}
 

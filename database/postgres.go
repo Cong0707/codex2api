@@ -2282,9 +2282,10 @@ func (db *DB) GetAccountEventTrend(ctx context.Context, start, end time.Time, bu
 			'YYYY-MM-DD"T"HH24:MI:SS'
 		) AS bucket,
 		COALESCE(SUM(CASE WHEN event_type = 'added' THEN 1 ELSE 0 END), 0) AS added,
-		COALESCE(SUM(CASE WHEN event_type = 'deleted' THEN 1 ELSE 0 END), 0) AS deleted
+		COALESCE(SUM(CASE WHEN event_type = 'deleted' AND source = 'manual' THEN 1 ELSE 0 END), 0) AS deleted
 	FROM account_events
 	WHERE created_at >= $1 AND created_at <= $2
+	  AND (event_type = 'added' OR (event_type = 'deleted' AND source = 'manual'))
 	GROUP BY 1
 	ORDER BY 1`
 
