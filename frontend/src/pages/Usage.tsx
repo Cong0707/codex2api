@@ -33,6 +33,27 @@ function formatTokens(value?: number | null): string {
   return value.toLocaleString()
 }
 
+// Claude 模型 → Codex 模型映射（与后端 defaultAnthropicModelMap 一致）
+const CLAUDE_MODEL_MAP: Record<string, string> = {
+  'claude-opus-4-6': 'gpt-5.4',
+  'claude-opus-4-6-20250610': 'gpt-5.4',
+  'claude-haiku-4-5-20251001': 'gpt-5.4-mini',
+  'claude-haiku-4-5': 'gpt-5.4-mini',
+  'claude-sonnet-4-6': 'gpt-5.3-codex',
+  'claude-sonnet-4-5-20250929': 'gpt-5.2-codex',
+  'claude-opus-4-5-20251101': 'gpt-5.3-codex',
+  'claude-sonnet-4-5-20250514': 'gpt-5.4',
+  'claude-sonnet-4-5': 'gpt-5.4',
+  'claude-sonnet-4-20250514': 'gpt-5.4',
+  'claude-sonnet-4': 'gpt-5.4',
+  'claude-opus-4-20250514': 'gpt-5.4',
+  'claude-opus-4': 'gpt-5.4',
+}
+
+function getCodexModel(model: string): string {
+  return CLAUDE_MODEL_MAP[model] || 'gpt-5.4'
+}
+
 function getStatusBadgeClassName(statusCode: number): string {
   if (statusCode === 200) {
     return 'border-transparent bg-emerald-500/14 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300'
@@ -431,6 +452,11 @@ export default function Usage() {
                             <Badge variant="outline" className="text-[14px]">
                               {log.model || '-'}
                             </Badge>
+                            {log.model && log.model.startsWith('claude') && (
+                              <Badge variant="outline" className="text-[11px] font-medium border-transparent bg-blue-500/10 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400">
+                                → {getCodexModel(log.model)}
+                              </Badge>
+                            )}
                             {log.reasoning_effort && (
                               <Badge
                                 variant="outline"
