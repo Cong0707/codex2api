@@ -55,12 +55,31 @@ export function formatRelativeTime(dateStr?: string | null, options: RelativeTim
     : i18n.t('common.daysAgoLong', { count: days })
 }
 
+const TIMEZONE_STORAGE_KEY = 'codex2api_timezone'
+const DEFAULT_TIMEZONE = 'Asia/Shanghai'
+
+/** 获取用户选择的时区，默认 Asia/Shanghai */
+export function getTimezone(): string {
+  try {
+    return localStorage.getItem(TIMEZONE_STORAGE_KEY) || DEFAULT_TIMEZONE
+  } catch {
+    return DEFAULT_TIMEZONE
+  }
+}
+
+/** 设置时区并持久化到 localStorage */
+export function setTimezone(tz: string): void {
+  try {
+    localStorage.setItem(TIMEZONE_STORAGE_KEY, tz)
+  } catch { /* 忽略 */ }
+}
+
 /**
  * Format a date string as Beijing time (UTC+8)
  * Output format: YYYY-MM-DD HH:mm:ss
  *
- * 使用 Intl.DateTimeFormat 以 Asia/Shanghai 时区格式化，
- * 无论后端返回的是 UTC（带 Z）还是带时区偏移（+08:00），都能正确显示北京时间，
+ * 使用 Intl.DateTimeFormat 以用户选择的时区格式化，
+ * 无论后端返回的是 UTC（带 Z）还是带时区偏移（+08:00），都能正确显示，
  * 避免手动加减偏移导致的重复转换问题。
  */
 export function formatBeijingTime(dateStr?: string | null, fallback = '-'): string {
@@ -70,7 +89,7 @@ export function formatBeijingTime(dateStr?: string | null, fallback = '-'): stri
   if (Number.isNaN(date.getTime())) return fallback
 
   const fmt = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: 'Asia/Shanghai',
+    timeZone: getTimezone(),
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

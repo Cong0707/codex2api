@@ -2,6 +2,7 @@ import type { ChangeEvent, KeyboardEvent } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, resetAdminAuthState, setAdminKey } from '../api'
+import { getTimezone, setTimezone } from '../utils/time'
 import PageHeader from '../components/PageHeader'
 import Pagination from '../components/Pagination'
 import StateShell from '../components/StateShell'
@@ -892,6 +893,45 @@ export default function Settings() {
                   }
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.schedulerPlanBonusDesc')}</p>
+              </div>
+            </div>
+            <h3 className="text-base font-semibold text-foreground mb-4 mt-6">{t('settings.display')}</h3>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4 mb-4">
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.timezone')}</label>
+                <Select
+                  value={getTimezone()}
+                  onValueChange={(value) => {
+                    setTimezone(value)
+                    window.location.reload()
+                  }}
+                  options={[
+                    { label: t('settings.timezoneAuto'), value: Intl.DateTimeFormat().resolvedOptions().timeZone },
+                    { label: '(UTC) UTC', value: 'UTC' },
+                    { label: '(GMT+08:00) Asia/Shanghai', value: 'Asia/Shanghai' },
+                    { label: '(GMT+09:00) Asia/Tokyo', value: 'Asia/Tokyo' },
+                    { label: '(GMT+09:00) Asia/Seoul', value: 'Asia/Seoul' },
+                    { label: '(GMT+08:00) Asia/Singapore', value: 'Asia/Singapore' },
+                    { label: '(GMT+08:00) Asia/Hong_Kong', value: 'Asia/Hong_Kong' },
+                    { label: '(GMT+08:00) Asia/Taipei', value: 'Asia/Taipei' },
+                    { label: '(GMT+07:00) Asia/Bangkok', value: 'Asia/Bangkok' },
+                    { label: '(GMT+04:00) Asia/Dubai', value: 'Asia/Dubai' },
+                    { label: '(GMT+05:30) Asia/Kolkata', value: 'Asia/Kolkata' },
+                    { label: '(GMT+01:00) Europe/London', value: 'Europe/London' },
+                    { label: '(GMT+02:00) Europe/Paris', value: 'Europe/Paris' },
+                    { label: '(GMT+02:00) Europe/Berlin', value: 'Europe/Berlin' },
+                    { label: '(GMT+03:00) Europe/Moscow', value: 'Europe/Moscow' },
+                    { label: '(GMT+02:00) Europe/Amsterdam', value: 'Europe/Amsterdam' },
+                    { label: '(GMT+02:00) Europe/Rome', value: 'Europe/Rome' },
+                    { label: '(GMT-04:00) America/New_York', value: 'America/New_York' },
+                    { label: '(GMT-07:00) America/Los_Angeles', value: 'America/Los_Angeles' },
+                    { label: '(GMT-05:00) America/Chicago', value: 'America/Chicago' },
+                    { label: '(GMT-03:00) America/Sao_Paulo', value: 'America/Sao_Paulo' },
+                    { label: '(GMT+10:00) Australia/Sydney', value: 'Australia/Sydney' },
+                    { label: '(GMT+12:00) Pacific/Auckland', value: 'Pacific/Auckland' },
+                  ]}
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.timezoneDesc')}</p>
               </div>
             </div>
             <h3 className="text-base font-semibold text-foreground mb-4 mt-6">{t('settings.security')}</h3>
