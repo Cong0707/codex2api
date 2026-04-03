@@ -1,4 +1,4 @@
-import type { ChangeEvent } from 'react'
+import type { ChangeEvent, DragEvent } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getAdminKey } from '../api'
 import Modal from '../components/Modal'
@@ -25,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Plus, RefreshCw, Trash2, Zap, FlaskConical, Ban, Timer, AlertTriangle, Upload, Download, ArrowDownToLine, KeyRound, ExternalLink, FileText, FileJson, BarChart3, Search, Fingerprint, Lock, Unlock } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, Zap, FlaskConical, Ban, Timer, AlertTriangle, Upload, Download, ArrowDownToLine, KeyRound, ExternalLink, FileText, FileJson, BarChart3, Search, Fingerprint, FolderOpen, Lock, Unlock } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import AccountUsageModal from '../components/AccountUsageModal'
@@ -283,6 +283,8 @@ export default function Accounts() {
   const [importing, setImporting] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [showImportPicker, setShowImportPicker] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const dragCounter = useRef(0)
   const [showExportPicker, setShowExportPicker] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [showMigrate, setShowMigrate] = useState(false)
@@ -310,6 +312,7 @@ export default function Accounts() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const jsonInputRef = useRef<HTMLInputElement>(null)
   const atFileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
   const { toast, showToast } = useToast()
   const { confirm, confirmDialog } = useConfirmDialog()
 
@@ -591,6 +594,143 @@ export default function Accounts() {
     }
   }
 
+  const importFiles = async (files: File[], format: 'txt' | 'json' | 'at_txt') => {
+    setImporting(true)
+    try {
+      const formData = new FormData()
+      if (format !== 'txt') formData.append('format', format)
+      for (const f of files) formData.append('file', f)
+      const res = await fetch('/api/admin/accounts/import', { method: 'POST', body: formData, headers: getAdminKey() ? { 'X-Admin-Key': getAdminKey() } : {} })
+      if (res.headers.get('content-type')?.includes('text/event-stream')) {
+        await readImportSSE(res)
+      } else {
+        const data = await res.json()
+        if (!res.ok) {
+          showToast(data.error ? t('accounts.importFailedWithReason', { error: data.error }) : t('accounts.importFailed'), 'error')
+        } else {
+          showToast(t('accounts.importCompleted'))
+          void reload()
+        }
+      }
+    } catch (error) {
+      showToast(t('accounts.importFailedWithReason', { error: getErrorMessage(error) }), 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const handleDragEnter = (e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current++
+    if (dragCounter.current === 1) setDragging(true)
+  }
+
+  const handleDragOver = (e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const handleDragLeave = (e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current--
+    if (dragCounter.current === 0) setDragging(false)
+  }
+
+  const readAllEntriesFromDirectory = (dirEntry: FileSystemDirectoryEntry): Promise<File[]> => {
+    return new Promise((resolve) => {
+      const files: File[] = []
+      const readEntries = (reader: FileSystemDirectoryReader) => {
+        reader.readEntries(async (entries) => {
+          if (entries.length === 0) { resolve(files); return }
+          for (const entry of entries) {
+            if (entry.isFile) {
+              const file = await new Promise<File>((res) => (entry as FileSystemFileEntry).file(res))
+              files.push(file)
+            } else if (entry.isDirectory) {
+              const subFiles = await readAllEntriesFromDirectory(entry as FileSystemDirectoryEntry)
+              files.push(...subFiles)
+            }
+          }
+          readEntries(reader)
+        })
+      }
+      readEntries(dirEntry.createReader())
+    })
+  }
+
+  const handleDrop = async (e: DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current = 0
+    setDragging(false)
+    if (importing) return
+
+    // 检测是否拖入了文件夹
+    const items = e.dataTransfer.items
+    const hasDirectories = items && Array.from(items).some(
+      item => item.webkitGetAsEntry?.()?.isDirectory
+    )
+
+    if (hasDirectories) {
+      const allFiles: File[] = []
+      for (const item of Array.from(items)) {
+        const entry = item.webkitGetAsEntry?.()
+        if (!entry) continue
+        if (entry.isDirectory) {
+          const dirFiles = await readAllEntriesFromDirectory(entry as FileSystemDirectoryEntry)
+          allFiles.push(...dirFiles)
+        } else if (entry.isFile) {
+          const file = await new Promise<File>((res) => (entry as FileSystemFileEntry).file(res))
+          allFiles.push(file)
+        }
+      }
+
+      const validFiles = allFiles.filter(f => {
+        const ext = f.name.split('.').pop()?.toLowerCase()
+        return (ext === 'txt' || ext === 'json') && f.size > 0
+      })
+
+      if (validFiles.length === 0) {
+        showToast(t('accounts.folderNoValidFiles'), 'error')
+        return
+      }
+
+      const txtFiles = validFiles.filter(f => f.name.split('.').pop()?.toLowerCase() === 'txt')
+      const jsonFiles = validFiles.filter(f => f.name.split('.').pop()?.toLowerCase() === 'json')
+
+      if (jsonFiles.length > 0) {
+        await importFiles([...jsonFiles, ...txtFiles], 'json')
+      } else if (txtFiles.length > 0) {
+        await importFiles(txtFiles, 'txt')
+      }
+      return
+    }
+
+    // 原有的文件拖放逻辑
+    const files = Array.from(e.dataTransfer.files).filter(f => f.size > 0)
+    if (files.length === 0) return
+
+    const txtFiles: File[] = []
+    const jsonFiles: File[] = []
+    for (const f of files) {
+      const ext = f.name.split('.').pop()?.toLowerCase()
+      if (ext === 'txt') txtFiles.push(f)
+      else if (ext === 'json') jsonFiles.push(f)
+      else {
+        showToast(t('accounts.unsupportedFileType', { name: f.name }), 'error')
+        return
+      }
+    }
+
+    if (jsonFiles.length > 0) {
+      await importFiles([...jsonFiles, ...txtFiles], 'json')
+    } else if (txtFiles.length > 0) {
+      await importFiles(txtFiles, 'txt')
+    }
+  }
+
   const handleFileImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
@@ -598,60 +738,17 @@ export default function Accounts() {
       showToast(t('accounts.selectTxtFile'), 'error')
       return
     }
-    setImporting(true)
     setShowImportPicker(false)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await fetch('/api/admin/accounts/import', { method: 'POST', body: formData, headers: getAdminKey() ? { 'X-Admin-Key': getAdminKey() } : {} })
-      if (res.headers.get('content-type')?.includes('text/event-stream')) {
-        await readImportSSE(res)
-      } else {
-        const data = await res.json()
-        if (!res.ok) {
-          showToast(data.error ? t('accounts.importFailedWithReason', { error: data.error }) : t('accounts.importFailed'), 'error')
-        } else {
-          showToast(t('accounts.importCompleted'))
-          void reload()
-        }
-      }
-    } catch (error) {
-      showToast(t('accounts.importFailedWithReason', { error: getErrorMessage(error) }), 'error')
-    } finally {
-      setImporting(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
+    await importFiles([file], 'txt')
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const handleJsonImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
     if (!files || files.length === 0) return
-    setImporting(true)
     setShowImportPicker(false)
-    try {
-      const formData = new FormData()
-      formData.append('format', 'json')
-      for (let i = 0; i < files.length; i++) {
-        formData.append('file', files[i])
-      }
-      const res = await fetch('/api/admin/accounts/import', { method: 'POST', body: formData, headers: getAdminKey() ? { 'X-Admin-Key': getAdminKey() } : {} })
-      if (res.headers.get('content-type')?.includes('text/event-stream')) {
-        await readImportSSE(res)
-      } else {
-        const data = await res.json()
-        if (!res.ok) {
-          showToast(data.error ? t('accounts.importFailedWithReason', { error: data.error }) : t('accounts.importFailed'), 'error')
-        } else {
-          showToast(t('accounts.importCompleted'))
-          void reload()
-        }
-      }
-    } catch (error) {
-      showToast(t('accounts.importFailedWithReason', { error: getErrorMessage(error) }), 'error')
-    } finally {
-      setImporting(false)
-      if (jsonInputRef.current) jsonInputRef.current.value = ''
-    }
+    await importFiles(Array.from(files), 'json')
+    if (jsonInputRef.current) jsonInputRef.current.value = ''
   }
 
   const handleAtFileImport = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -661,30 +758,37 @@ export default function Accounts() {
       showToast(t('accounts.selectTxtFile'), 'error')
       return
     }
-    setImporting(true)
     setShowImportPicker(false)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('format', 'at_txt')
-      const res = await fetch('/api/admin/accounts/import', { method: 'POST', body: formData, headers: getAdminKey() ? { 'X-Admin-Key': getAdminKey() } : {} })
-      if (res.headers.get('content-type')?.includes('text/event-stream')) {
-        await readImportSSE(res)
-      } else {
-        const data = await res.json()
-        if (!res.ok) {
-          showToast(data.error ? t('accounts.importFailedWithReason', { error: data.error }) : t('accounts.importFailed'), 'error')
-        } else {
-          showToast(t('accounts.importCompleted'))
-          void reload()
-        }
-      }
-    } catch (error) {
-      showToast(t('accounts.importFailedWithReason', { error: getErrorMessage(error) }), 'error')
-    } finally {
-      setImporting(false)
-      if (atFileInputRef.current) atFileInputRef.current.value = ''
+    await importFiles([file], 'at_txt')
+    if (atFileInputRef.current) atFileInputRef.current.value = ''
+  }
+
+  const handleFolderImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files
+    if (!files || files.length === 0) return
+    setShowImportPicker(false)
+
+    const validFiles = Array.from(files).filter(f => {
+      const ext = f.name.split('.').pop()?.toLowerCase()
+      return (ext === 'txt' || ext === 'json') && f.size > 0
+    })
+
+    if (validFiles.length === 0) {
+      showToast(t('accounts.folderNoValidFiles'), 'error')
+      if (folderInputRef.current) folderInputRef.current.value = ''
+      return
     }
+
+    const txtFiles = validFiles.filter(f => f.name.split('.').pop()?.toLowerCase() === 'txt')
+    const jsonFiles = validFiles.filter(f => f.name.split('.').pop()?.toLowerCase() === 'json')
+
+    if (jsonFiles.length > 0) {
+      await importFiles([...jsonFiles, ...txtFiles], 'json')
+    } else if (txtFiles.length > 0) {
+      await importFiles(txtFiles, 'txt')
+    }
+
+    if (folderInputRef.current) folderInputRef.current.value = ''
   }
 
   const handleExport = async (format: 'json' | 'txt', scope: 'healthy' | 'selected') => {
@@ -1007,6 +1111,22 @@ export default function Accounts() {
   }
 
   return (
+    <div
+      className="relative"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={(e) => void handleDrop(e)}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary bg-primary/5 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-2 text-primary">
+            <Upload className="size-10" />
+            <span className="text-lg font-semibold">{t('accounts.dropToImport')}</span>
+            <span className="text-sm text-muted-foreground">{t('accounts.dropHint')}</span>
+          </div>
+        </div>
+      )}
     <StateShell
       variant="page"
       loading={loading}
@@ -1080,6 +1200,13 @@ export default function Accounts() {
                 accept=".txt"
                 className="hidden"
                 onChange={(e) => void handleAtFileImport(e)}
+              />
+              <input
+                ref={folderInputRef}
+                type="file"
+                className="hidden"
+                onChange={(e) => void handleFolderImport(e)}
+                {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
               />
             </div>
           )}
@@ -1681,7 +1808,7 @@ export default function Accounts() {
           contentClassName="sm:max-w-[640px]"
           onClose={() => setShowImportPicker(false)}
         >
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <button
               className="flex items-center gap-3 rounded-xl border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors"
               onClick={() => {
@@ -1719,6 +1846,19 @@ export default function Accounts() {
               <div>
                 <div className="text-sm font-medium">{t('accounts.importAtTxt')}</div>
                 <div className="text-[11px] text-muted-foreground">{t('accounts.importAtTxtDesc')}</div>
+              </div>
+            </button>
+            <button
+              className="flex items-center gap-3 rounded-xl border border-border px-4 py-3 text-left hover:bg-muted/50 transition-colors"
+              onClick={() => {
+                setShowImportPicker(false)
+                folderInputRef.current?.click()
+              }}
+            >
+              <FolderOpen className="size-5 shrink-0 text-muted-foreground" />
+              <div>
+                <div className="text-sm font-medium">{t('accounts.importFolder')}</div>
+                <div className="text-[11px] text-muted-foreground">{t('accounts.importFolderDesc')}</div>
               </div>
             </button>
           </div>
@@ -1920,6 +2060,7 @@ export default function Accounts() {
         <ToastNotice toast={toast} />
       </>
     </StateShell>
+    </div>
   )
 }
 
