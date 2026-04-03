@@ -98,6 +98,7 @@ export default function Accounts() {
   const [refreshingIds, setRefreshingIds] = useState<Set<number>>(new Set())
   const [batchLoading, setBatchLoading] = useState(false)
   const [batchTesting, setBatchTesting] = useState(false)
+  const [batchRefreshingAll, setBatchRefreshingAll] = useState(false)
   const [cleaningBanned, setCleaningBanned] = useState(false)
   const [cleaningRateLimited, setCleaningRateLimited] = useState(false)
   const [cleaningError, setCleaningError] = useState(false)
@@ -625,6 +626,19 @@ export default function Accounts() {
     }
   }
 
+  const handleBatchRefreshAll = async () => {
+    setBatchRefreshingAll(true)
+    try {
+      const result = await api.batchRefreshAccounts()
+      showToast(t('accounts.batchRefreshDone', { success: result.success, fail: result.failed }))
+      void reload()
+    } catch (error) {
+      showToast(t('accounts.batchRefreshFailed', { error: getErrorMessage(error) }), 'error')
+    } finally {
+      setBatchRefreshingAll(false)
+    }
+  }
+
   const handleCleanBanned = async () => {
     const confirmed = await confirm({
       title: t('accounts.cleanBannedTitle'),
@@ -705,6 +719,10 @@ export default function Accounts() {
               <Button variant="outline" size="sm" disabled={batchTesting} onClick={() => void handleBatchTest()}>
                 <FlaskConical className="size-3" />
                 {batchTesting ? t('accounts.batchTesting') : t('accounts.batchTest')}
+              </Button>
+              <Button variant="outline" size="sm" disabled={batchRefreshingAll} onClick={() => void handleBatchRefreshAll()}>
+                <RefreshCw className="size-3" />
+                {batchRefreshingAll ? t('accounts.refreshing') : t('accounts.batchRefresh')}
               </Button>
               <Button variant="outline" size="sm" disabled={cleaningBanned} onClick={() => void handleCleanBanned()}>
                 <Ban className="size-3" />

@@ -188,6 +188,82 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// BatchRefresh 批量刷新所有 RT 账号（用 RT 刷新 AT）
+// POST /api/admin/accounts/batch-refresh
+func (h *Handler) BatchRefresh(c *gin.Context) {
+	accounts := h.store.Accounts()
+	if len(accounts) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"total":         0,
+			"refreshable":   0,
+			"success":       0,
+			"failed":        0,
+			"skipped_no_rt": 0,
+		})
+		return
+	}
+
+	concurrency := h.store.GetTestConcurrency()
+	if concurrency <= 0 {
+		concurrency = 10
+	}
+	if concurrency > 20 {
+		concurrency = 20
+	}
+
+	refreshFn := h.refreshAccount
+	if refreshFn == nil {
+		refreshFn = h.refreshSingleAccount
+	}
+
+	var (
+		refreshable  int64
+		successCount int64
+		failedCount  int64
+		skippedNoRT  int64
+		wg           sync.WaitGroup
+		sem          = make(chan struct{}, concurrency)
+	)
+
+	for _, account := range accounts {
+		account.Mu().RLock()
+		hasRT := strings.TrimSpace(account.RefreshToken) != ""
+		dbID := account.DBID
+		account.Mu().RUnlock()
+
+		if !hasRT {
+			atomic.AddInt64(&skippedNoRT, 1)
+			continue
+		}
+
+		atomic.AddInt64(&refreshable, 1)
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			if err := refreshFn(ctx, id); err != nil {
+				atomic.AddInt64(&failedCount, 1)
+				return
+			}
+			atomic.AddInt64(&successCount, 1)
+		}(dbID)
+	}
+
+	wg.Wait()
+
+	c.JSON(http.StatusOK, gin.H{
+		"total":         len(accounts),
+		"refreshable":   refreshable,
+		"success":       successCount,
+		"failed":        failedCount,
+		"skipped_no_rt": skippedNoRT,
+	})
+}
+
 // BatchTest 批量测试所有账号连接
 // POST /api/admin/accounts/batch-test
 func (h *Handler) BatchTest(c *gin.Context) {

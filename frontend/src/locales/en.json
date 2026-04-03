@@ -266,6 +266,7 @@
     "batchDeleteDesc": "{{count}} selected accounts will be removed from the current pool. Please confirm the selection is correct.",
     "batchDeleteDone": "Batch delete complete: {{success}} succeeded, {{fail}} failed",
     "batchRefreshDone": "Batch refresh complete: {{success}} succeeded, {{fail}} failed",
+    "batchRefreshFailed": "Batch refresh failed: {{error}}",
     "batchTestDone": "Batch test complete: success {{success}} / banned {{banned}} / rate-limited {{rateLimited}} / failed {{failed}}",
     "batchTestFailed": "Batch test failed: {{error}}",
     "cleanBannedTitle": "Clear Banned Accounts",

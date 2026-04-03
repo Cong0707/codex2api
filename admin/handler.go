@@ -94,6 +94,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/accounts/:id/test", h.TestConnection)
 	api.GET("/accounts/:id/usage", h.GetAccountUsage)
 	api.POST("/accounts/batch-test", h.BatchTest)
+	api.POST("/accounts/batch-refresh", h.BatchRefresh)
 	api.POST("/accounts/clean-banned", h.CleanBanned)
 	api.POST("/accounts/clean-rate-limited", h.CleanRateLimited)
 	api.POST("/accounts/clean-error", h.CleanError)

@@ -266,6 +266,7 @@
     "batchDeleteDesc": "{{count}} 个选中账号会一起从账号池中移除。请确认当前选择无误。",
     "batchDeleteDone": "批量删除完成：成功 {{success}}，失败 {{fail}}",
     "batchRefreshDone": "批量刷新完成：成功 {{success}}，失败 {{fail}}",
+    "batchRefreshFailed": "批量刷新失败：{{error}}",
     "batchTestDone": "批量测试完成：成功 {{success}} / 封禁 {{banned}} / 限流 {{rateLimited}} / 失败 {{failed}}",
     "batchTestFailed": "批量测试失败：{{error}}",
     "cleanBannedTitle": "清理封禁账号",

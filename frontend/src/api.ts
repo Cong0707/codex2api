@@ -161,6 +161,8 @@ export const api = {
   getModels: () => request<{ models: string[] }>('/models'),
   batchTestAccounts: () =>
     request<{ total: number; success: number; failed: number; banned: number; rate_limited: number }>('/accounts/batch-test', { method: 'POST' }),
+  batchRefreshAccounts: () =>
+    request<{ total: number; refreshable: number; success: number; failed: number; skipped_no_rt: number }>('/accounts/batch-refresh', { method: 'POST' }),
   cleanBanned: () =>
     request<{ message: string; cleaned: number }>('/accounts/clean-banned', { method: 'POST' }),
   cleanRateLimited: () =>
