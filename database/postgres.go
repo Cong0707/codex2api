@@ -29,6 +29,7 @@ type AccountRow struct {
 	CooldownReason string
 	CooldownUntil  sql.NullTime
 	ErrorMessage   string
+	Locked         bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -1651,6 +1652,7 @@ func (db *DB) ListActive(ctx context.Context) ([]*AccountRow, error) {
 		       a.public_api_key_id,
 		       COALESCE(s.settled_amount_usd, 0) AS settled_amount_usd,
 		       a.status, a.cooldown_reason, a.cooldown_until,
+		       COALESCE(a.locked, false) AS locked,
 		       COALESCE(a.error_message, '') AS error_message,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -1683,6 +1685,7 @@ func (db *DB) ListActive(ctx context.Context) ([]*AccountRow, error) {
 			&a.Status,
 			&a.CooldownReason,
 			&cooldownUntilRaw,
+			&a.Locked,
 			&a.ErrorMessage,
 			&createdAtRaw,
 			&updatedAtRaw,
@@ -1728,6 +1731,7 @@ func (db *DB) ListActiveForAdmin(ctx context.Context) ([]*AccountRow, error) {
 		       a.public_api_key_id,
 		       COALESCE(s.settled_amount_usd, 0) AS settled_amount_usd,
 		       a.status, a.cooldown_reason, a.cooldown_until,
+		       COALESCE(a.locked, false) AS locked,
 		       COALESCE(a.error_message, '') AS error_message,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -1753,6 +1757,7 @@ func (db *DB) ListActiveForAdmin(ctx context.Context) ([]*AccountRow, error) {
 		       a.public_api_key_id,
 		       COALESCE(s.settled_amount_usd, 0) AS settled_amount_usd,
 		       a.status, a.cooldown_reason, a.cooldown_until,
+		       COALESCE(a.locked, false) AS locked,
 		       COALESCE(a.error_message, '') AS error_message,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -1794,6 +1799,7 @@ func (db *DB) ListActiveForAdmin(ctx context.Context) ([]*AccountRow, error) {
 				&a.Status,
 				&a.CooldownReason,
 				&cooldownUntilRaw,
+				&a.Locked,
 				&a.ErrorMessage,
 				&createdAtRaw,
 				&updatedAtRaw,
@@ -1843,6 +1849,7 @@ func (db *DB) ListAll(ctx context.Context) ([]*AccountRow, error) {
 		       a.public_api_key_id,
 		       COALESCE(s.settled_amount_usd, 0) AS settled_amount_usd,
 		       a.status, a.cooldown_reason, a.cooldown_until,
+		       COALESCE(a.locked, false) AS locked,
 		       COALESCE(a.error_message, '') AS error_message,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -1874,6 +1881,7 @@ func (db *DB) ListAll(ctx context.Context) ([]*AccountRow, error) {
 			&a.Status,
 			&a.CooldownReason,
 			&cooldownUntilRaw,
+			&a.Locked,
 			&a.ErrorMessage,
 			&createdAtRaw,
 			&updatedAtRaw,
@@ -1905,6 +1913,7 @@ func (db *DB) GetAccountByID(ctx context.Context, id int64) (*AccountRow, error)
 		       a.public_api_key_id,
 		       COALESCE(s.settled_amount_usd, 0) AS settled_amount_usd,
 		       a.status, a.cooldown_reason, a.cooldown_until,
+		       COALESCE(a.locked, false) AS locked,
 		       COALESCE(a.error_message, '') AS error_message,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -1931,6 +1940,7 @@ func (db *DB) GetAccountByID(ctx context.Context, id int64) (*AccountRow, error)
 		&a.Status,
 		&a.CooldownReason,
 		&cooldownUntilRaw,
+		&a.Locked,
 		&a.ErrorMessage,
 		&createdAtRaw,
 		&updatedAtRaw,
@@ -1956,6 +1966,12 @@ func (db *DB) GetAccountByID(ctx context.Context, id int64) (*AccountRow, error)
 		return nil, fmt.Errorf("解析 updated_at 失败: %w", err)
 	}
 	return a, nil
+}
+
+// SetAccountLocked 设置账号的锁定状态
+func (db *DB) SetAccountLocked(ctx context.Context, id int64, locked bool) error {
+	_, err := db.conn.ExecContext(ctx, `UPDATE accounts SET locked = $1 WHERE id = $2`, locked, id)
+	return err
 }
 
 // UpdateCredentials 原子合并更新账号的 credentials（JSONB || 运算符，不覆盖已有字段）

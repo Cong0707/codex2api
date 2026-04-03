@@ -118,6 +118,7 @@ type Account struct {
 	LastUsedAt     int64 // 最后使用时间（UnixNano）
 	Disabled       int32 // 原子标志，1 = 立即不可调度（401 时瞬间置位，无需等锁）
 	AddedAt        int64 // 加入号池的时间（UnixNano），用于过期清理
+	Locked         int32 // 原子标志，1 = 锁定，自动清理跳过此账号
 
 }
 
@@ -1416,6 +1417,9 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 		if row.PublicAPIKeyID.Valid {
 			account.PublicAPIKeyID = row.PublicAPIKeyID.Int64
 		}
+		if row.Locked {
+			atomic.StoreInt32(&account.Locked, 1)
+		}
 
 		// 尝试从 credentials 恢复已有的 AT
 		if at != "" {
@@ -1552,6 +1556,11 @@ func (s *Store) CleanByRuntimeStatus(ctx context.Context, targetStatus string) i
 
 	for _, acc := range accounts {
 		if acc == nil || acc.RuntimeStatus() != targetStatus {
+			continue
+		}
+
+		// 锁定账号跳过自动清理
+		if atomic.LoadInt32(&acc.Locked) == 1 {
 			continue
 		}
 
@@ -2437,6 +2446,11 @@ func (s *Store) CleanFullUsageAccounts(ctx context.Context) int {
 			continue
 		}
 
+		// 锁定账号跳过自动清理
+		if atomic.LoadInt32(&acc.Locked) == 1 {
+			continue
+		}
+
 		// 跳过正在处理请求的账号
 		if atomic.LoadInt64(&acc.ActiveRequests) > 0 {
 			continue
@@ -2481,6 +2495,10 @@ func (s *Store) CleanExpiredAccounts(ctx context.Context, maxAge time.Duration) 
 	var skipNoAddedAt, skipNotExpired, skipActive, skipProven int
 	for _, acc := range accounts {
 		if acc == nil {
+			continue
+		}
+		// 锁定账号跳过自动清理
+		if atomic.LoadInt32(&acc.Locked) == 1 {
 			continue
 		}
 		addedAt := atomic.LoadInt64(&acc.AddedAt)
@@ -2945,6 +2963,17 @@ func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 	if err := s.db.UpdateCredentials(ctx, dbID, credentials); err != nil {
 		log.Printf("[账号 %d] 更新数据库失败: %v", dbID, err)
 	}
+
+	// 自动锁定 free 以上的账号（pro/plus/team/teamplus 等）
+	if info != nil && atomic.LoadInt32(&acc.Locked) == 0 {
+		plan := strings.ToLower(info.PlanType)
+		if plan != "" && plan != "free" {
+			atomic.StoreInt32(&acc.Locked, 1)
+			_ = s.db.SetAccountLocked(ctx, dbID, true)
+			log.Printf("[账号 %d] 检测到 %s 套餐，已自动锁定", dbID, info.PlanType)
+		}
+	}
+
 	if expiredCooldown {
 		if err := s.db.ClearCooldown(ctx, dbID); err != nil {
 			log.Printf("[账号 %d] 清理过期冷却状态失败: %v", dbID, err)

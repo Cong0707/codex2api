@@ -217,6 +217,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "allow_remote_migration", "INTEGER DEFAULT 0"},
 		{"system_settings", "public_initial_credit_usd", "REAL DEFAULT 0.1"},
 		{"system_settings", "public_full_credit_usd", "REAL DEFAULT 2"},
+		{"accounts", "locked", "INTEGER DEFAULT 0"},
 		{"proxies", "test_ip", "TEXT DEFAULT ''"},
 		{"proxies", "test_location", "TEXT DEFAULT ''"},
 		{"proxies", "test_latency_ms", "INTEGER DEFAULT 0"},

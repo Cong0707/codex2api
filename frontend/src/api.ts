@@ -112,6 +112,8 @@ export const api = {
   // backward-compatible old route
   getAccountRawInfo: (id: number) =>
     request<AccountRawInfoResponse>(`/accounts/${id}/raw-info`),
+  toggleAccountLock: (id: number, locked: boolean) =>
+    request<MessageResponse>(`/accounts/${id}/lock`, { method: 'POST', body: JSON.stringify({ locked }) }),
   getAccountUsage: (id: number) =>
     request<AccountUsageDetail>(`/accounts/${id}/usage`),
   getHealth: () => request<HealthResponse>('/health'),

@@ -99,6 +99,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/accounts/:id/auth-info", h.GetAccountAuthInfo)
 	api.GET("/accounts/:id/quota-info", h.GetAccountQuotaInfo)
 	api.GET("/accounts/:id/raw-info", h.GetAccountRawInfo)
+	api.POST("/accounts/:id/lock", h.ToggleAccountLock)
 	api.GET("/accounts/:id/test", h.TestConnection)
 	api.GET("/accounts/:id/usage", h.GetAccountUsage)
 	api.POST("/accounts/batch-test", h.BatchTest)
@@ -275,6 +276,7 @@ type accountResponse struct {
 	LastRateLimitedAt   string                     `json:"last_rate_limited_at,omitempty"`
 	LastTimeoutAt       string                     `json:"last_timeout_at,omitempty"`
 	LastServerErrorAt   string                     `json:"last_server_error_at,omitempty"`
+	Locked             bool                       `json:"locked"`
 }
 
 type schedulerBreakdownResponse struct {
@@ -326,6 +328,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			Status:              row.Status,
 			ATOnly:              !hasRT && hasAT,
 			ProxyURL:            row.ProxyURL,
+			Locked:              row.Locked,
 			CreatedAt:           row.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:           row.UpdatedAt.Format(time.RFC3339),
 		}
@@ -1498,6 +1501,47 @@ func (h *Handler) RefreshAccount(c *gin.Context) {
 	}
 
 	writeMessage(c, http.StatusOK, "账号刷新成功")
+}
+
+// ToggleAccountLock 切换账号的锁定状态
+func (h *Handler) ToggleAccountLock(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "无效的账号 ID")
+		return
+	}
+
+	var req struct {
+		Locked bool `json:"locked"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+
+	if err := h.db.SetAccountLocked(ctx, id, req.Locked); err != nil {
+		writeError(c, http.StatusInternalServerError, "更新锁定状态失败: "+err.Error())
+		return
+	}
+
+	// 同步更新内存中的状态
+	if acc := h.store.FindByID(id); acc != nil {
+		if req.Locked {
+			atomic.StoreInt32(&acc.Locked, 1)
+		} else {
+			atomic.StoreInt32(&acc.Locked, 0)
+		}
+	}
+
+	if req.Locked {
+		writeMessage(c, http.StatusOK, "账号已锁定")
+	} else {
+		writeMessage(c, http.StatusOK, "账号已解锁")
+	}
 }
 
 func (h *Handler) refreshSingleAccount(ctx context.Context, id int64) error {
