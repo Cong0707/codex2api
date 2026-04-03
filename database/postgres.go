@@ -130,6 +130,11 @@ func New(driver string, dsn string) (*DB, error) {
 		if err := db.configureSQLite(ctx); err != nil {
 			return nil, fmt.Errorf("配置 SQLite 失败: %w", err)
 		}
+	} else {
+		// PostgreSQL: 统一会话时区为 UTC，确保 NOW() 和时间字面量一致
+		if _, err := conn.ExecContext(ctx, "SET timezone = 'UTC'"); err != nil {
+			return nil, fmt.Errorf("设置数据库时区失败: %w", err)
+		}
 	}
 	if err := db.migrate(ctx); err != nil {
 		return nil, fmt.Errorf("数据库迁移失败: %w", err)
@@ -201,10 +206,10 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cooldown_reason VARCHAR(50) DEFAULT '';
 	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMPTZ NULL;
 	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS public_api_key_id BIGINT NULL;
-		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS locked BOOLEAN DEFAULT FALSE;
-		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS score_bias_override INT NULL;
-		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS base_concurrency_override INT NULL;
-		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS locked BOOLEAN DEFAULT FALSE;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS score_bias_override INT NULL;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS base_concurrency_override INT NULL;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
 
 	UPDATE accounts
 		SET status = 'deleted',
@@ -232,10 +237,8 @@ func (db *DB) migrate(ctx context.Context) error {
 		total_tokens   INT DEFAULT 0,
 		status_code    INT DEFAULT 0,
 		duration_ms    INT DEFAULT 0,
-		created_at     TIMESTAMP DEFAULT NOW()
+		created_at     TIMESTAMPTZ DEFAULT NOW()
 	);
-
-	-- 复合索引
 	CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);
 	CREATE INDEX IF NOT EXISTS idx_usage_logs_account_id ON usage_logs(account_id);
 	CREATE INDEX IF NOT EXISTS idx_usage_logs_created_status ON usage_logs(created_at, status_code);
@@ -256,21 +259,21 @@ func (db *DB) migrate(ctx context.Context) error {
 		id         SERIAL PRIMARY KEY,
 		name       VARCHAR(255) DEFAULT '',
 		key        VARCHAR(255) NOT NULL UNIQUE,
-		created_at TIMESTAMP DEFAULT NOW()
+		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
 	CREATE TABLE IF NOT EXISTS public_api_keys (
 		id         SERIAL PRIMARY KEY,
 		name       VARCHAR(255) DEFAULT '',
 		key        VARCHAR(255) NOT NULL UNIQUE,
-		created_at TIMESTAMP DEFAULT NOW()
+		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS created_ip VARCHAR(64) DEFAULT '';
 	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS last_used_ip VARCHAR(64) DEFAULT '';
-	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP NULL;
+	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ NULL;
 	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS balance_usd NUMERIC(12,4) DEFAULT 0;
 	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS source VARCHAR(32) DEFAULT 'admin';
-	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+	ALTER TABLE public_api_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 	CREATE TABLE IF NOT EXISTS public_account_settlements (
 		id                     SERIAL PRIMARY KEY,
@@ -282,8 +285,8 @@ func (db *DB) migrate(ctx context.Context) error {
 		initial_amount_usd     NUMERIC(12,4) NOT NULL DEFAULT 0,
 		full_amount_usd        NUMERIC(12,4) NOT NULL DEFAULT 0,
 		finalized              BOOLEAN NOT NULL DEFAULT FALSE,
-		created_at             TIMESTAMP DEFAULT NOW(),
-		updated_at             TIMESTAMP DEFAULT NOW()
+		created_at             TIMESTAMPTZ DEFAULT NOW(),
+		updated_at             TIMESTAMPTZ DEFAULT NOW()
 	);
 	CREATE INDEX IF NOT EXISTS idx_public_account_settlements_key_id ON public_account_settlements(public_api_key_id);
 
@@ -295,7 +298,7 @@ func (db *DB) migrate(ctx context.Context) error {
 		delta_usd         NUMERIC(12,4) NOT NULL DEFAULT 0,
 		balance_after_usd NUMERIC(12,4) NOT NULL DEFAULT 0,
 		note              TEXT DEFAULT '',
-		created_at        TIMESTAMP DEFAULT NOW()
+		created_at        TIMESTAMPTZ DEFAULT NOW()
 	);
 	CREATE INDEX IF NOT EXISTS idx_public_balance_logs_key_created ON public_balance_logs(public_api_key_id, created_at);
 
@@ -304,11 +307,11 @@ func (db *DB) migrate(ctx context.Context) error {
 		code                   VARCHAR(255) NOT NULL UNIQUE,
 		amount_usd             NUMERIC(12,4) NOT NULL,
 		status                 VARCHAR(20) NOT NULL DEFAULT 'active',
-		deleted_at             TIMESTAMP NULL,
+		deleted_at             TIMESTAMPTZ NULL,
 		deleted_reason         VARCHAR(50) DEFAULT '',
 		deleted_by_public_key_id BIGINT DEFAULT 0,
-		created_at             TIMESTAMP DEFAULT NOW(),
-		updated_at             TIMESTAMP DEFAULT NOW()
+		created_at             TIMESTAMPTZ DEFAULT NOW(),
+		updated_at             TIMESTAMPTZ DEFAULT NOW()
 	);
 	CREATE INDEX IF NOT EXISTS idx_redeem_codes_status_amount ON redeem_codes(status, amount_usd);
 
@@ -367,7 +370,7 @@ func (db *DB) migrate(ctx context.Context) error {
 		url        VARCHAR(500) NOT NULL UNIQUE,
 		label      VARCHAR(255) DEFAULT '',
 		enabled    BOOLEAN DEFAULT TRUE,
-		created_at TIMESTAMP DEFAULT NOW()
+		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_ip VARCHAR(100) DEFAULT '';
 	ALTER TABLE proxies ADD COLUMN IF NOT EXISTS test_location VARCHAR(255) DEFAULT '';
@@ -378,12 +381,41 @@ func (db *DB) migrate(ctx context.Context) error {
 		account_id INT NOT NULL DEFAULT 0,
 		event_type VARCHAR(20) NOT NULL,
 		source     VARCHAR(30) DEFAULT '',
-		created_at TIMESTAMP DEFAULT NOW()
+		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 	CREATE INDEX IF NOT EXISTS idx_account_events_created ON account_events(created_at);
 	CREATE INDEX IF NOT EXISTS idx_account_events_type_created ON account_events(event_type, created_at);
 	`
 	_, err := db.conn.ExecContext(ctx, query)
+	if err != nil {
+		return err
+	}
+
+	// 独立长超时：将已有 TIMESTAMP 列迁移为 TIMESTAMPTZ（大表 ALTER COLUMN TYPE 可能较慢）
+	migrateQuery := `
+	DO $$
+	DECLARE
+		_tbl  TEXT;
+		_col  TEXT;
+		_rec  RECORD;
+	BEGIN
+		FOR _rec IN
+			SELECT table_name, column_name
+			FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND data_type = 'timestamp without time zone'
+			  AND table_name IN ('accounts', 'usage_logs', 'api_keys', 'public_api_keys', 'public_account_settlements', 'public_balance_logs', 'redeem_codes', 'proxies', 'account_events')
+		LOOP
+			EXECUTE format(
+				'ALTER TABLE %I ALTER COLUMN %I TYPE TIMESTAMPTZ USING %I AT TIME ZONE current_setting(''TIMEZONE'')',
+				_rec.table_name, _rec.column_name, _rec.column_name
+			);
+		END LOOP;
+	END $$;
+	`
+	migrateCtx, migrateCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer migrateCancel()
+	_, err = db.conn.ExecContext(migrateCtx, migrateQuery)
 	return err
 }
 
