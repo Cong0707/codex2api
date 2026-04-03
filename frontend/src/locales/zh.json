@@ -495,9 +495,11 @@
     "clearLogs": "清空日志",
     "emptyTitle": "暂无请求记录",
     "emptyDesc": "请求进入代理后，会在这里展示最近日志和状态码。",
+    "emptyFilteredDesc": "当前筛选条件下暂无请求记录，可清除筛选后重试。",
     "tableStatus": "状态",
     "tableModel": "模型",
     "tableAccount": "来源账号",
+    "tableApiKey": "API 密钥",
     "tableEndpoint": "端点",
     "tableType": "类型",
     "tableToken": "TOKEN",
@@ -506,9 +508,11 @@
     "tableDuration": "总耗时",
     "tableTime": "时间",
     "searchEmail": "搜索账号邮箱…",
+    "allApiKeys": "全部密钥",
     "allModels": "全部模型",
     "allEndpoints": "全部端点",
     "allTypes": "全部类型",
+    "unknownApiKey": "未记录",
     "clearFilters": "清除筛选"
   },
   "settings": {

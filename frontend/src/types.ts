@@ -273,6 +273,9 @@ export interface UsageLog {
   stream: boolean
   cached_tokens: number
   service_tier: string
+  api_key_id: number
+  api_key_name: string
+  api_key_masked: string
   account_email: string
   created_at: ISODateString
 }

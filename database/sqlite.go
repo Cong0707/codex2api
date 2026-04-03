@@ -60,7 +60,10 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			upstream_endpoint TEXT DEFAULT '',
 			stream INTEGER DEFAULT 0,
 			cached_tokens INTEGER DEFAULT 0,
-			service_tier TEXT DEFAULT ''
+			service_tier TEXT DEFAULT '',
+			api_key_id INTEGER DEFAULT 0,
+			api_key_name TEXT DEFAULT '',
+			api_key_masked TEXT DEFAULT ''
 		);`,
 		`CREATE TABLE IF NOT EXISTS api_keys (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +198,9 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"usage_logs", "stream", "INTEGER DEFAULT 0"},
 		{"usage_logs", "cached_tokens", "INTEGER DEFAULT 0"},
 		{"usage_logs", "service_tier", "TEXT DEFAULT ''"},
+		{"usage_logs", "api_key_id", "INTEGER DEFAULT 0"},
+		{"usage_logs", "api_key_name", "TEXT DEFAULT ''"},
+		{"usage_logs", "api_key_masked", "TEXT DEFAULT ''"},
 		{"system_settings", "pg_max_conns", "INTEGER DEFAULT 50"},
 		{"system_settings", "redis_pool_size", "INTEGER DEFAULT 30"},
 		{"system_settings", "auto_clean_unauthorized", "INTEGER DEFAULT 0"},
@@ -247,6 +253,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_account_id ON usage_logs(account_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_created_status ON usage_logs(created_at, status_code);`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_account_status ON usage_logs(account_id, status_code);`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_api_key_created_at ON usage_logs(api_key_id, created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_account_events_created ON account_events(created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_account_events_type_created ON account_events(event_type, created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_public_account_settlements_key_id ON public_account_settlements(public_api_key_id);`,

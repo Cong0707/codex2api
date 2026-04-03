@@ -137,3 +137,26 @@ func TestRefreshAccountReturnsRefreshFailure(t *testing.T) {
 		t.Fatalf("error = %q, want %q", got, "刷新失败: upstream unavailable")
 	}
 }
+
+func TestGetUsageLogsRejectsInvalidAPIKeyID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := &Handler{}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/admin/usage/logs?start=2026-01-01T00:00:00Z&end=2026-01-02T00:00:00Z&page=1&api_key_id=bad", nil)
+
+	handler.GetUsageLogs(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := payload["error"]; got != "api_key_id 参数无效，需要正整数" {
+		t.Fatalf("error = %q, want %q", got, "api_key_id 参数无效，需要正整数")
+	}
+}

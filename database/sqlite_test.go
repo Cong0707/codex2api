@@ -130,7 +130,6 @@ func TestSQLiteMigratesLegacyDeletedAccounts(t *testing.T) {
 		t.Fatal("deleted_at 未迁移")
 	}
 }
-
 func TestUsageLogsFilterByAPIKeyID(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 

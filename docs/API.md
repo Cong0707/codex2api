@@ -543,6 +543,7 @@ data: {"type":"complete","current":3,"total":3,"success":2,"failed":1}
 - `email`: 按账号邮箱过滤
 - `model`: 按模型过滤
 - `endpoint`: 按端点过滤
+- `api_key_id`: 按 API 密钥 ID 过滤
 - `fast`: true/false (是否 fast 服务)
 - `stream`: true/false (是否流式)
 
@@ -554,6 +555,9 @@ data: {"type":"complete","current":3,"total":3,"success":2,"failed":1}
       "id": 1,
       "account_id": 1,
       "account_email": "user@example.com",
+      "api_key_id": 3,
+      "api_key_name": "Team A",
+      "api_key_masked": "sk-t****...****1234",
       "endpoint": "/v1/chat/completions",
       "model": "gpt-5.4",
       "status_code": 200,

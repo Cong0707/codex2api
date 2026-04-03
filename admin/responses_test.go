@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codex2api/database"
 	"github.com/gin-gonic/gin"
 )
 
@@ -450,7 +451,14 @@ func TestSchedulerBreakdownResponse(t *testing.T) {
 
 func TestUsageLogsResponse(t *testing.T) {
 	resp := usageLogsResponse{
-		Logs: nil, // Would contain actual log entries
+		Logs: []*database.UsageLog{
+			{
+				ID:           1,
+				APIKeyID:     3,
+				APIKeyName:   "Team A",
+				APIKeyMasked: "sk-a****...****1111",
+			},
+		},
 	}
 
 	data, err := json.Marshal(resp)
@@ -459,6 +467,25 @@ func TestUsageLogsResponse(t *testing.T) {
 	}
 	if !json.Valid(data) {
 		t.Fatalf("marshaled usageLogsResponse produced invalid JSON: %s", string(data))
+	}
+
+	var decoded struct {
+		Logs []map[string]interface{} `json:"logs"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal usageLogsResponse JSON: %v", err)
+	}
+	if len(decoded.Logs) != 1 {
+		t.Fatalf("len(decoded.Logs) = %d, want %d", len(decoded.Logs), 1)
+	}
+	if got := decoded.Logs[0]["api_key_id"]; got != float64(3) {
+		t.Fatalf("api_key_id = %v, want %v", got, float64(3))
+	}
+	if got := decoded.Logs[0]["api_key_name"]; got != "Team A" {
+		t.Fatalf("api_key_name = %v, want %q", got, "Team A")
+	}
+	if got := decoded.Logs[0]["api_key_masked"]; got != "sk-a****...****1111" {
+		t.Fatalf("api_key_masked = %v, want %q", got, "sk-a****...****1111")
 	}
 }
 
