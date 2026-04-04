@@ -267,3 +267,55 @@ func TestPublicQuotaStatsExcludeUnauthorizedAndDeleted(t *testing.T) {
 		t.Fatalf("quota_remaining_accounts=%.2f, want=0.2", payload.QuotaRemainingAccounts)
 	}
 }
+
+func TestPublicKeyInfoPostAlias(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newSQLiteDBForAdminTest(t)
+	h := &Handler{db: db}
+
+	ctx := context.Background()
+	key := "pk-info-post-test-1234567890"
+	keyID, err := db.InsertPublicAPIKeyWithMeta(ctx, "pub-info-post", key, "public_generate", "10.0.0.20", 0)
+	if err != nil {
+		t.Fatalf("insert public key: %v", err)
+	}
+
+	r := gin.New()
+	h.RegisterPublicRoutes(r)
+
+	req := httptest.NewRequest(http.MethodPost, "/public/key-info", nil)
+	req.Header.Set("X-Public-Key", key)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want=%d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if payload.ID != keyID {
+		t.Fatalf("id=%d, want=%d", payload.ID, keyID)
+	}
+}
+
+func TestPublicQuotaStatsPostAlias(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newSQLiteDBForAdminTest(t)
+	h := &Handler{db: db}
+
+	r := gin.New()
+	h.RegisterPublicRoutes(r)
+
+	req := httptest.NewRequest(http.MethodPost, "/public/quota-stats", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want=%d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}

@@ -23,7 +23,9 @@ func (h *Handler) RegisterPublicRoutes(r *gin.Engine) {
 	group.POST("/generate", h.PublicGenerateKey)
 	group.POST("/redeem", h.publicAPIKeyAuthMiddleware(), h.PublicRedeem)
 	group.GET("/key-info", h.publicAPIKeyAuthMiddleware(), h.PublicKeyInfo)
+	group.POST("/key-info", h.publicAPIKeyAuthMiddleware(), h.PublicKeyInfo)
 	group.GET("/quota-stats", h.PublicQuotaStats)
+	group.POST("/quota-stats", h.PublicQuotaStats)
 }
 
 func extractPublicKeyFromRequest(c *gin.Context) string {
