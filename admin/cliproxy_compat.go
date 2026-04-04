@@ -21,6 +21,7 @@ import (
 	"github.com/codex2api/proxy"
 	"github.com/codex2api/security"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // RegisterCliproxyRoutes registers minimal CLIProxyAPI-compatible management routes.
@@ -587,7 +588,38 @@ func (h *Handler) insertCompatAccount(ctx context.Context, name string, entry co
 		_ = h.db.UpdateCredentials(ctx, id, creds)
 	}
 
+	acc := &auth.Account{
+		DBID:         id,
+		RefreshToken: entry.refreshToken,
+		AccessToken:  entry.accessToken,
+		AccountID:    entry.accountID,
+		Email:        entry.email,
+		PlanType:     entry.planType,
+		ProxyURL:     entry.proxyURL,
+	}
 	if sourcePublicKeyID != nil && *sourcePublicKeyID > 0 {
+		// 公开上传账号先不绑定、不入账：必须先通过一次真实连通测试才算有效上传。
+		acc.PublicAPIKeyID = 0
+	}
+	if !entry.expiresAt.IsZero() {
+		acc.ExpiresAt = entry.expiresAt
+	} else if entry.accessToken != "" {
+		acc.ExpiresAt = time.Now().Add(1 * time.Hour)
+	}
+
+	h.store.AddAccount(acc)
+	h.db.InsertAccountEventAsync(id, "added", "cliproxy")
+
+	if sourcePublicKeyID != nil && *sourcePublicKeyID > 0 {
+		validateCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
+		if err := h.validatePublicUploadedAccount(validateCtx, id); err != nil {
+			_ = h.db.SetError(context.Background(), id, "deleted")
+			h.store.RemoveAccount(id)
+			h.db.InsertAccountEventAsync(id, "upload_invalid", "cliproxy")
+			return 0, fmt.Errorf("上传后测试失败，账号无效: %w", err)
+		}
+
 		initialCredit := 0.1
 		fullCredit := 2.0
 		if h.store != nil {
@@ -601,33 +633,18 @@ func (h *Handler) insertCompatAccount(ctx context.Context, name string, entry co
 			InitialAmountUSD:     initialCredit,
 			FullAmountUSD:        fullCredit,
 		}); err != nil {
-			_ = h.db.SetError(ctx, id, "deleted")
-			return 0, err
+			_ = h.db.SetError(context.Background(), id, "deleted")
+			h.store.RemoveAccount(id)
+			return 0, fmt.Errorf("账号绑定公开 key 失败: %w", err)
 		}
-	}
 
-	acc := &auth.Account{
-		DBID:         id,
-		RefreshToken: entry.refreshToken,
-		AccessToken:  entry.accessToken,
-		AccountID:    entry.accountID,
-		Email:        entry.email,
-		PlanType:     entry.planType,
-		ProxyURL:     entry.proxyURL,
-	}
-	if sourcePublicKeyID != nil && *sourcePublicKeyID > 0 {
-		acc.PublicAPIKeyID = *sourcePublicKeyID
-	}
-	if !entry.expiresAt.IsZero() {
-		acc.ExpiresAt = entry.expiresAt
-	} else if entry.accessToken != "" {
-		acc.ExpiresAt = time.Now().Add(1 * time.Hour)
-	}
-
-	h.store.AddAccount(acc)
-	h.db.InsertAccountEventAsync(id, "added", "cliproxy")
-
-	if entry.refreshToken != "" && entry.accessToken == "" {
+		if bound := h.store.FindByID(id); bound != nil {
+			bound.Mu().Lock()
+			bound.PublicAPIKeyID = *sourcePublicKeyID
+			bound.Mu().Unlock()
+		}
+		h.db.InsertAccountEventAsync(id, "upload_valid", "cliproxy")
+	} else if entry.refreshToken != "" && entry.accessToken == "" {
 		go func(accountID int64) {
 			refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -638,6 +655,107 @@ func (h *Handler) insertCompatAccount(ctx context.Context, name string, entry co
 	}
 
 	return id, nil
+}
+
+func (h *Handler) validatePublicUploadedAccount(ctx context.Context, accountID int64) error {
+	if h == nil || h.store == nil {
+		return errors.New("服务未就绪")
+	}
+	account := h.store.FindByID(accountID)
+	if account == nil {
+		return errors.New("账号不在运行时池中")
+	}
+
+	account.Mu().RLock()
+	hasToken := strings.TrimSpace(account.AccessToken) != ""
+	needsRefresh := strings.TrimSpace(account.RefreshToken) != "" && !hasToken
+	account.Mu().RUnlock()
+
+	if needsRefresh {
+		refreshCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		if err := h.store.RefreshSingle(refreshCtx, accountID); err != nil {
+			return fmt.Errorf("refresh 失败: %w", err)
+		}
+		account = h.store.FindByID(accountID)
+		if account == nil {
+			return errors.New("刷新后账号不在运行时池中")
+		}
+	}
+
+	account.Mu().RLock()
+	hasToken = strings.TrimSpace(account.AccessToken) != ""
+	account.Mu().RUnlock()
+	if !hasToken {
+		return errors.New("账号没有可用的 Access Token")
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	testModel := h.store.GetTestModel()
+	payload := buildTestPayload(testModel)
+	proxyURL := h.store.NextProxy()
+	resp, reqErr := proxy.ExecuteRequest(testCtx, account, payload, "", proxyURL, "", nil, nil)
+	if reqErr != nil {
+		return fmt.Errorf("测试请求失败: %w", reqErr)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, account); ok {
+			h.store.PersistUsageSnapshot(account, usagePct)
+		}
+		errBody, _ := io.ReadAll(resp.Body)
+		errCode := strings.TrimSpace(gjson.GetBytes(errBody, "error.code").String())
+		errMsg := strings.TrimSpace(gjson.GetBytes(errBody, "error.message").String())
+		account.SetLastFailureDetail(resp.StatusCode, errCode, errMsg)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			h.store.MarkCooldown(account, 24*time.Hour, "unauthorized")
+		case http.StatusTooManyRequests:
+			if !h.store.MarkFullUsageCooldownFromSnapshot(account) {
+				h.store.MarkCooldown(account, auth.RateLimitedProbeInterval, "rate_limited")
+			}
+		}
+		return fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(string(errBody), 500))
+	}
+
+	if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, account); ok {
+		h.store.PersistUsageSnapshot(account, usagePct)
+	}
+
+	hasContent := false
+	completed := false
+	streamErr := proxy.ReadSSEStream(resp.Body, func(data []byte) bool {
+		eventType := gjson.GetBytes(data, "type").String()
+		switch eventType {
+		case "response.output_text.delta":
+			if strings.TrimSpace(gjson.GetBytes(data, "delta").String()) != "" {
+				hasContent = true
+			}
+		case "response.completed":
+			completed = true
+			return false
+		case "response.failed":
+			return false
+		}
+		return true
+	})
+	if streamErr != nil {
+		return fmt.Errorf("读取测试响应失败: %w", streamErr)
+	}
+	if !completed {
+		return errors.New("测试未完成（未收到 response.completed）")
+	}
+	if !hasContent {
+		return errors.New("测试未收到模型输出")
+	}
+
+	account.ClearLastFailureDetail()
+	if cooldownUntil, cooldownReason, active := account.GetCooldownSnapshot(); !(active && cooldownReason == "full_usage" && time.Now().Before(cooldownUntil)) {
+		h.store.ClearCooldown(account)
+	}
+	return nil
 }
 
 func parseCompatEntries(data []byte) ([]map[string]interface{}, error) {
