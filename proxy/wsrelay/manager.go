@@ -416,7 +416,7 @@ func (m *Manager) AcquireConnection(
 			lock.Unlock()
 			return nil, nil, err
 		}
-
+		// 存储新连接并立即占位 pending request，避免返回后才记账产生竞态
 		m.connections.Store(key, wc)
 		pr := wc.session.AddPendingRequest(sessionKey)
 		lock.Unlock()
