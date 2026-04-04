@@ -155,7 +155,6 @@ const (
 	Originator   = "codex_cli_rs"
 )
 
-// WebsocketExecuteFunc WebSocket 执行函数（由 wsrelay 包在 main.go 中注册，避免循环依赖）
 var WebsocketExecuteFunc func(
 	ctx context.Context,
 	account *auth.Account,
@@ -435,7 +434,6 @@ func requestAPIKeyFromHeaders(headers http.Header) string {
 	}
 	return ""
 }
-
 // ResolveSessionID 从下游请求提取或生成 session ID
 // 优先级：
 //  1. Header: Session_id

@@ -52,9 +52,39 @@ func DefaultDeviceProfileConfig() *DeviceProfileConfig {
 		PackageVersion:         stable.Version,
 		RuntimeVersion:         stable.Version,
 		OS:                     defaultDeviceProfileOS,
-		Arch:                   defaultDeviceProfileArch,
-		StabilizeDeviceProfile: true,
+			Arch:                   defaultDeviceProfileArch,
+			StabilizeDeviceProfile: true,
+		}
+}
+
+// DeviceProfileConfigFromEnv 从环境变量读取 Codex 画像与 Beta 配置。
+// 未显式设置的字段沿用稳定默认值，避免回退到空画像。
+func DeviceProfileConfigFromEnv(lookup func(string) string) *DeviceProfileConfig {
+	cfg := DefaultDeviceProfileConfig()
+	if cfg == nil {
+		cfg = &DeviceProfileConfig{}
 	}
+	if lookup == nil {
+		return cfg
+	}
+	override := func(target *string, key string) {
+		if target == nil {
+			return
+		}
+		if value := strings.TrimSpace(lookup(key)); value != "" {
+			*target = value
+		}
+	}
+	override(&cfg.UserAgent, "CODEX_USER_AGENT")
+	override(&cfg.PackageVersion, "CODEX_PACKAGE_VERSION")
+	override(&cfg.RuntimeVersion, "CODEX_RUNTIME_VERSION")
+	override(&cfg.OS, "CODEX_OS")
+	override(&cfg.Arch, "CODEX_ARCH")
+	override(&cfg.BetaFeatures, "CODEX_BETA_FEATURES")
+	if value := strings.TrimSpace(lookup("STABILIZE_DEVICE_PROFILE")); value != "" {
+		cfg.StabilizeDeviceProfile = strings.EqualFold(value, "true")
+	}
+	return cfg
 }
 
 // CLIVersion 表示 Codex CLI 版本

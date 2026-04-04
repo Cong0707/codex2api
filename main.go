@@ -186,14 +186,8 @@ func main() {
 	r.Use(security.SecurityHeadersMiddleware())
 
 	// handler 不再接收 cfg.APIKeys
-	// 设备指纹默认走稳定模式，必要时可通过环境变量显式关闭。
-	deviceCfg := proxy.DefaultDeviceProfileConfig()
-	if raw, ok := os.LookupEnv("STABILIZE_DEVICE_PROFILE"); ok {
-		deviceCfg.StabilizeDeviceProfile = strings.EqualFold(strings.TrimSpace(raw), "true")
-	}
-	if raw, ok := os.LookupEnv("CODEX_BETA_FEATURES"); ok {
-		deviceCfg.BetaFeatures = strings.TrimSpace(raw)
-	}
+	// 从环境变量读取 Codex 画像与 Beta 配置，并以稳定默认值为基线。
+	deviceCfg := proxy.DeviceProfileConfigFromEnv(os.Getenv)
 	handler := proxy.NewHandler(store, db, cfg, deviceCfg)
 
 	// 注册 WebSocket 执行函数（避免 proxy ↔ wsrelay 循环依赖）

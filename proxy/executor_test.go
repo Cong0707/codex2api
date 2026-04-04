@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -187,5 +188,28 @@ func TestIsUserVisibleDeltaEvent(t *testing.T) {
 				t.Fatalf("isUserVisibleDeltaEvent() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveSessionIDPrefersContinuityHeaders(t *testing.T) {
+	headers := http.Header{
+		"Session_id":      []string{"session-from-header"},
+		"Conversation_id": []string{"conversation-from-header"},
+		"Authorization":   []string{"Bearer sk-test-123"},
+	}
+
+	if got := ResolveSessionID(headers, []byte(`{"prompt_cache_key":"body-key"}`)); got != "session-from-header" {
+		t.Fatalf("ResolveSessionID() = %q, want %q", got, "session-from-header")
+	}
+
+	headers.Del("Session_id")
+	if got := ResolveSessionID(headers, []byte(`{"prompt_cache_key":"body-key"}`)); got != "conversation-from-header" {
+		t.Fatalf("ResolveSessionID() = %q, want %q", got, "conversation-from-header")
+	}
+
+	headers.Del("Conversation_id")
+	headers.Set("Idempotency-Key", "idempotency-key-1")
+	if got := ResolveSessionID(headers, []byte(`{"prompt_cache_key":"body-key"}`)); got != "idempotency-key-1" {
+		t.Fatalf("ResolveSessionID() = %q, want %q", got, "idempotency-key-1")
 	}
 }
