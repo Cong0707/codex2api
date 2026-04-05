@@ -56,7 +56,7 @@ func TestExtractCredentialUpdatesFromRawInfo_AccountsArray(t *testing.T) {
 	}
 }
 
-func TestMergeCredentialRefresh_PreferHigherPlan(t *testing.T) {
+func TestMergeCredentialRefresh_PlanFromQuotaData(t *testing.T) {
 	profile := cliproxyProfile{
 		Email:      "from_cpa@example.com",
 		AccountID:  "acc_from_cpa",
@@ -67,16 +67,38 @@ func TestMergeCredentialRefresh_PreferHigherPlan(t *testing.T) {
 		"plan_type": "free",
 	}
 
-	refreshed, updates := mergeCredentialRefresh(profile, upstream, "free", "plus")
+	refreshed, updates := mergeCredentialRefresh(profile, upstream, "plus", "free")
 
-	if got := refreshed["plan_type"]; got != "plus" {
-		t.Fatalf("refreshed plan_type = %q, want plus", got)
+	if got := refreshed["plan_type"]; got != "free" {
+		t.Fatalf("refreshed plan_type = %q, want free", got)
 	}
-	if got, _ := updates["plan_type"].(string); got != "plus" {
-		t.Fatalf("updates plan_type = %q, want plus", got)
+	if got, _ := updates["plan_type"].(string); got != "free" {
+		t.Fatalf("updates plan_type = %q, want free", got)
 	}
 	if got := refreshed["email"]; got != "from_cpa@example.com" {
 		t.Fatalf("email = %q, want from_cpa@example.com", got)
+	}
+}
+
+func TestMergeAuthCredentialRefresh_NoPlanWrite(t *testing.T) {
+	profile := cliproxyProfile{
+		Email:     "auth@example.com",
+		AccountID: "acc_auth",
+		PlanType:  "team",
+	}
+	upstream := map[string]string{
+		"plan_type": "free",
+	}
+	refreshed, updates := mergeAuthCredentialRefresh(profile, upstream)
+
+	if _, ok := refreshed["plan_type"]; ok {
+		t.Fatalf("auth refresh should not include plan_type, got %v", refreshed["plan_type"])
+	}
+	if _, ok := updates["plan_type"]; ok {
+		t.Fatalf("auth refresh should not update plan_type")
+	}
+	if got := refreshed["email"]; got != "auth@example.com" {
+		t.Fatalf("email = %q, want auth@example.com", got)
 	}
 }
 

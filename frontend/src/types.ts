@@ -99,6 +99,8 @@ export interface AccountRawInfoResponse {
   source: string
   fetched_at: ISODateString
   refreshed_fields?: Record<string, string>
+  raw_endpoint?: string
+  plan_source?: string
   raw: unknown
 }
 

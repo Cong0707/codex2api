@@ -105,6 +105,11 @@ export const api = {
     request<MessageResponse>(`/accounts/${id}`, { method: 'DELETE' }),
   refreshAccount: (id: number) =>
     request<MessageResponse>(`/accounts/${id}/refresh`, { method: 'POST' }),
+  getAccountAuthInfo: (id: number) =>
+    request<AccountRawInfoResponse>(`/accounts/${id}/auth-info`),
+  getAccountQuotaInfo: (id: number) =>
+    request<AccountRawInfoResponse>(`/accounts/${id}/quota-info`),
+  // backward-compatible old route
   getAccountRawInfo: (id: number) =>
     request<AccountRawInfoResponse>(`/accounts/${id}/raw-info`),
   getAccountUsage: (id: number) =>

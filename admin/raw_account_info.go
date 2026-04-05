@@ -42,19 +42,118 @@ type openAISnapshot struct {
 	PlanSource string
 }
 
-// GetAccountRawInfo 获取账号一手信息：以 CPA/CLIProxyAPI 口径为主，原始数据返回 OpenAI 原生响应。
+type rawInfoContext struct {
+	id          int64
+	account     *auth.Account
+	profile     cliproxyProfile
+	currentPlan string
+	accessToken string
+	accountID   string
+	proxyURL    string
+}
+
+// GetAccountAuthInfo 获取认证信息（OpenAI 原生 /wham/accounts/check）。
+// GET /api/admin/accounts/:id/auth-info
+func (h *Handler) GetAccountAuthInfo(c *gin.Context) {
+	ctxData, ok := h.prepareRawInfoContext(c)
+	if !ok {
+		return
+	}
+
+	reqCtx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	snapshots := fetchEndpointSnapshots(reqCtx, openAIWhamAccountCheckURL, ctxData.accessToken, ctxData.accountID, ctxData.proxyURL)
+
+	_, _, bestRaw, bestEndpoint := pickBestPlanSnapshot(snapshots)
+	if len(bestRaw) == 0 {
+		writeError(c, http.StatusBadGateway, firstSnapshotError(snapshots, "拉取 OpenAI 认证信息失败"))
+		return
+	}
+
+	upstreamFields, _ := extractCredentialUpdatesFromRawInfo(bestRaw)
+	refreshedFields, credentialUpdates := mergeAuthCredentialRefresh(ctxData.profile, upstreamFields)
+	credentialUpdates["raw_info_refreshed_at"] = time.Now().UTC().Format(time.RFC3339)
+
+	dbCtx, dbCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer dbCancel()
+	if err := h.db.UpdateCredentials(dbCtx, ctxData.id, credentialUpdates); err != nil {
+		writeInternalError(c, fmt.Errorf("写入认证信息失败: %w", err))
+		return
+	}
+
+	applyRawInfoToRuntimeAccount(ctxData.account, refreshedFields)
+	h.db.InsertAccountEventAsync(ctxData.id, "auth_info_refreshed", "manual")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":          "认证信息获取成功",
+		"source":           "openai",
+		"fetched_at":       time.Now().UTC().Format(time.RFC3339),
+		"refreshed_fields": refreshedFields,
+		"raw_endpoint":     bestEndpoint,
+		"raw":              buildRawPayload(bestRaw),
+	})
+}
+
+// GetAccountQuotaInfo 获取配额信息（OpenAI 原生 /wham/usage），并以该数据为套餐判断依据刷新账号套餐。
+// GET /api/admin/accounts/:id/quota-info
+func (h *Handler) GetAccountQuotaInfo(c *gin.Context) {
+	ctxData, ok := h.prepareRawInfoContext(c)
+	if !ok {
+		return
+	}
+
+	reqCtx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	snapshots := fetchEndpointSnapshots(reqCtx, openAIWhamUsageURL, ctxData.accessToken, ctxData.accountID, ctxData.proxyURL)
+
+	bestPlan, bestSource, bestRaw, bestEndpoint := pickBestPlanSnapshot(snapshots)
+	if len(bestRaw) == 0 {
+		writeError(c, http.StatusBadGateway, firstSnapshotError(snapshots, "拉取 OpenAI 配额信息失败"))
+		return
+	}
+
+	upstreamFields, _ := extractCredentialUpdatesFromRawInfo(bestRaw)
+	refreshedFields, credentialUpdates := mergeCredentialRefresh(ctxData.profile, upstreamFields, ctxData.currentPlan, bestPlan)
+	credentialUpdates["raw_info_refreshed_at"] = time.Now().UTC().Format(time.RFC3339)
+
+	dbCtx, dbCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer dbCancel()
+	if err := h.db.UpdateCredentials(dbCtx, ctxData.id, credentialUpdates); err != nil {
+		writeInternalError(c, fmt.Errorf("写入配额信息失败: %w", err))
+		return
+	}
+
+	applyRawInfoToRuntimeAccount(ctxData.account, refreshedFields)
+	h.db.InsertAccountEventAsync(ctxData.id, "quota_info_refreshed", "manual")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":          "配额信息获取成功",
+		"source":           "openai",
+		"fetched_at":       time.Now().UTC().Format(time.RFC3339),
+		"refreshed_fields": refreshedFields,
+		"plan_source":      bestSource,
+		"raw_endpoint":     bestEndpoint,
+		"raw":              buildRawPayload(bestRaw),
+	})
+}
+
+// GetAccountRawInfo 兼容旧接口，等价于配额信息接口。
 // GET /api/admin/accounts/:id/raw-info
 func (h *Handler) GetAccountRawInfo(c *gin.Context) {
+	h.GetAccountQuotaInfo(c)
+}
+
+func (h *Handler) prepareRawInfoContext(c *gin.Context) (*rawInfoContext, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, "无效的账号 ID")
-		return
+		return nil, false
 	}
 
 	account := h.store.FindByID(id)
 	if account == nil {
 		writeError(c, http.StatusNotFound, "账号不在运行时池中")
-		return
+		return nil, false
 	}
 
 	refreshFn := h.refreshAccount
@@ -75,11 +174,11 @@ func (h *Handler) GetAccountRawInfo(c *gin.Context) {
 		defer cancel()
 		if err := refreshFn(refreshCtx, id); err != nil {
 			writeError(c, http.StatusInternalServerError, "刷新 Access Token 失败: "+err.Error())
-			return
+			return nil, false
 		}
 	} else if !hasAccessToken {
 		writeError(c, http.StatusBadRequest, "账号没有可用的 Access Token，且缺少 Refresh Token")
-		return
+		return nil, false
 	}
 
 	account.Mu().RLock()
@@ -90,7 +189,7 @@ func (h *Handler) GetAccountRawInfo(c *gin.Context) {
 
 	if accessToken == "" {
 		writeError(c, http.StatusBadRequest, "账号没有可用的 Access Token，请先刷新")
-		return
+		return nil, false
 	}
 
 	proxyURL := strings.TrimSpace(h.store.NextProxy())
@@ -103,7 +202,7 @@ func (h *Handler) GetAccountRawInfo(c *gin.Context) {
 	row, err := h.db.GetAccountByID(rowCtx, id)
 	if err != nil {
 		writeInternalError(c, fmt.Errorf("读取账号凭据失败: %w", err))
-		return
+		return nil, false
 	}
 
 	profile := resolveCliproxyProfile(row)
@@ -111,94 +210,35 @@ func (h *Handler) GetAccountRawInfo(c *gin.Context) {
 		profile = resolveRuntimeProfile(account)
 	}
 
-	reqCtx, reqCancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-	defer reqCancel()
-	snapshots := fetchOpenAISnapshots(reqCtx, accessToken, accountID, proxyURL)
-
-	bestPlan, bestSource, bestRaw, bestEndpoint := pickBestPlanSnapshot(snapshots)
-	if len(bestRaw) == 0 {
-		if !hasCliproxyProfile(profile) {
-			writeError(c, http.StatusBadGateway, firstSnapshotError(snapshots, "拉取 OpenAI 原始信息失败"))
-			return
-		}
-	}
-
-	snapshotFields, _ := extractCredentialUpdatesFromRawInfo(bestRaw)
-	refreshedFields, credentialUpdates := mergeCredentialRefresh(profile, snapshotFields, currentPlan, bestPlan)
-	credentialUpdates["raw_info_refreshed_at"] = time.Now().UTC().Format(time.RFC3339)
-
-	dbCtx, dbCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer dbCancel()
-	if err := h.db.UpdateCredentials(dbCtx, id, credentialUpdates); err != nil {
-		writeInternalError(c, fmt.Errorf("写入账号原始信息失败: %w", err))
-		return
-	}
-
-	applyRawInfoToRuntimeAccount(account, refreshedFields)
-	h.db.InsertAccountEventAsync(id, "raw_info_refreshed", "manual")
-
-	if bestSource == "" {
-		bestSource = profile.PlanSource
-	}
-
-	rawPayload := json.RawMessage([]byte(`{}`))
-	if len(bestRaw) > 0 {
-		rawPayload = json.RawMessage(bestRaw)
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":          "账号原始信息获取成功",
-		"source":           "openai",
-		"fetched_at":       time.Now().UTC().Format(time.RFC3339),
-		"refreshed_fields": refreshedFields,
-		"plan_source":      bestSource,
-		"raw_endpoint":     bestEndpoint,
-		"raw":              rawPayload,
-	})
+	return &rawInfoContext{
+		id:          id,
+		account:     account,
+		profile:     profile,
+		currentPlan: currentPlan,
+		accessToken: accessToken,
+		accountID:   accountID,
+		proxyURL:    proxyURL,
+	}, true
 }
 
-func fetchOpenAISnapshots(ctx context.Context, accessToken, accountID, proxyURL string) []openAISnapshot {
-	steps := []struct {
-		endpoint          string
-		withAccountHeader bool
-	}{
-		{endpoint: openAIMeURL, withAccountHeader: true},
-		{endpoint: openAIMeURL, withAccountHeader: false},
-		{endpoint: openAIWhamUsageURL, withAccountHeader: true},
-		{endpoint: openAIWhamAccountCheckURL, withAccountHeader: true},
-		{endpoint: openAIWhamUsageURL, withAccountHeader: false},
-		{endpoint: openAIWhamAccountCheckURL, withAccountHeader: false},
-	}
-
-	snapshots := make([]openAISnapshot, 0, len(steps))
-	bestPlan := ""
-
-	for _, step := range steps {
-		if !step.withAccountHeader && strings.TrimSpace(accountID) == "" {
+func fetchEndpointSnapshots(ctx context.Context, endpoint, accessToken, accountID, proxyURL string) []openAISnapshot {
+	snapshots := make([]openAISnapshot, 0, 2)
+	for _, withAccountHeader := range []bool{true, false} {
+		if !withAccountHeader && strings.TrimSpace(accountID) == "" {
 			continue
 		}
-
-		raw, statusCode, err := requestOpenAIEndpoint(ctx, step.endpoint, accessToken, accountID, proxyURL, step.withAccountHeader)
+		raw, statusCode, err := requestOpenAIEndpoint(ctx, endpoint, accessToken, accountID, proxyURL, withAccountHeader)
 		snapshot := openAISnapshot{
-			Endpoint:   step.endpoint,
+			Endpoint:   endpoint,
 			Raw:        raw,
 			StatusCode: statusCode,
 			Err:        err,
 		}
 		if err == nil {
-			snapshot.PlanType, snapshot.PlanSource = detectPlanFromPayload(step.endpoint, raw)
-			if isPlanBetter(bestPlan, snapshot.PlanType) {
-				bestPlan = snapshot.PlanType
-			}
+			snapshot.PlanType, snapshot.PlanSource = detectPlanFromPayload(endpoint, raw)
 		}
 		snapshots = append(snapshots, snapshot)
-
-		// 已拿到付费套餐信号时可以提前结束，减少额外上游请求。
-		if strings.TrimSpace(bestPlan) != "" && auth.NormalizePlanType(bestPlan) != "free" {
-			break
-		}
 	}
-
 	return snapshots
 }
 
@@ -551,6 +591,31 @@ func isPlanBetter(current, candidate string) bool {
 	return auth.PreferPlanType(currentNorm, candidateNorm) == candidateNorm && currentNorm != candidateNorm
 }
 
+func mergeAuthCredentialRefresh(profile cliproxyProfile, upstream map[string]string) (map[string]string, map[string]interface{}) {
+	refreshed := make(map[string]string, 2)
+	updates := make(map[string]interface{}, 2)
+
+	email := strings.TrimSpace(profile.Email)
+	if email == "" {
+		email = strings.TrimSpace(upstream["email"])
+	}
+	if email != "" {
+		refreshed["email"] = email
+		updates["email"] = email
+	}
+
+	accountID := strings.TrimSpace(profile.AccountID)
+	if accountID == "" {
+		accountID = strings.TrimSpace(upstream["account_id"])
+	}
+	if accountID != "" {
+		refreshed["account_id"] = accountID
+		updates["account_id"] = accountID
+	}
+
+	return refreshed, updates
+}
+
 func mergeCredentialRefresh(profile cliproxyProfile, upstream map[string]string, currentPlan string, detectedPlan string) (map[string]string, map[string]interface{}) {
 	refreshed := make(map[string]string, 3)
 	updates := make(map[string]interface{}, 3)
@@ -573,15 +638,14 @@ func mergeCredentialRefresh(profile cliproxyProfile, upstream map[string]string,
 		updates["account_id"] = accountID
 	}
 
-	selectedPlan := auth.NormalizePlanType(strings.TrimSpace(currentPlan))
-	if candidate := strings.TrimSpace(profile.PlanType); candidate != "" {
-		selectedPlan = auth.PreferPlanType(selectedPlan, candidate)
-	}
-	if candidate := strings.TrimSpace(detectedPlan); candidate != "" {
-		selectedPlan = auth.PreferPlanType(selectedPlan, candidate)
-	}
+	quotaPlan := auth.NormalizePlanType(strings.TrimSpace(detectedPlan))
 	if candidate := strings.TrimSpace(upstream["plan_type"]); candidate != "" {
-		selectedPlan = auth.PreferPlanType(selectedPlan, candidate)
+		quotaPlan = auth.PreferPlanType(quotaPlan, candidate)
+	}
+
+	selectedPlan := auth.NormalizePlanType(strings.TrimSpace(currentPlan))
+	if quotaPlan != "" {
+		selectedPlan = quotaPlan
 	}
 	if selectedPlan != "" {
 		refreshed["plan_type"] = selectedPlan
@@ -667,6 +731,21 @@ func firstNonEmptyJSONValue(rawBody []byte, paths ...string) string {
 		}
 	}
 	return ""
+}
+
+func buildRawPayload(raw []byte) json.RawMessage {
+	if len(raw) == 0 {
+		return json.RawMessage([]byte(`{}`))
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return json.RawMessage([]byte(`{}`))
+	}
+	if !json.Valid([]byte(trimmed)) {
+		escaped, _ := json.Marshal(trimmed)
+		return json.RawMessage([]byte(fmt.Sprintf(`{"raw_text":%s}`, string(escaped))))
+	}
+	return json.RawMessage([]byte(trimmed))
 }
 
 func escapeForGJSONLiteral(value string) string {

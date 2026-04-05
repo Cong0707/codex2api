@@ -91,6 +91,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/import", h.ImportAccounts)
 	api.DELETE("/accounts/:id", h.DeleteAccount)
 	api.POST("/accounts/:id/refresh", h.RefreshAccount)
+	api.GET("/accounts/:id/auth-info", h.GetAccountAuthInfo)
+	api.GET("/accounts/:id/quota-info", h.GetAccountQuotaInfo)
 	api.GET("/accounts/:id/raw-info", h.GetAccountRawInfo)
 	api.GET("/accounts/:id/test", h.TestConnection)
 	api.GET("/accounts/:id/usage", h.GetAccountUsage)

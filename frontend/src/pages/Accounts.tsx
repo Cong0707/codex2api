@@ -108,11 +108,15 @@ export default function Accounts() {
   const [cleaningRateLimited, setCleaningRateLimited] = useState(false)
   const [cleaningError, setCleaningError] = useState(false)
   const [testingAccount, setTestingAccount] = useState<AccountRow | null>(null)
-  const [rawInfoLoadingIds, setRawInfoLoadingIds] = useState<Set<number>>(new Set())
+  const [authInfoLoadingIds, setAuthInfoLoadingIds] = useState<Set<number>>(new Set())
+  const [quotaInfoLoadingIds, setQuotaInfoLoadingIds] = useState<Set<number>>(new Set())
   const [rawInfoDialog, setRawInfoDialog] = useState<{
+    kind: 'auth' | 'quota'
     account: AccountRow
     fetchedAt: string
     refreshedFields: Record<string, string>
+    rawEndpoint?: string
+    planSource?: string
     rawText: string
   } | null>(null)
   const [usageAccount, setUsageAccount] = useState<AccountRow | null>(null)
@@ -575,23 +579,52 @@ export default function Accounts() {
     }
   }
 
-  const handleViewRawInfo = async (account: AccountRow) => {
-    setRawInfoLoadingIds((prev) => new Set(prev).add(account.id))
+  const openRawInfoDialog = (
+    kind: 'auth' | 'quota',
+    account: AccountRow,
+    result: Awaited<ReturnType<typeof api.getAccountAuthInfo>>,
+  ) => {
+    const rawText = JSON.stringify(result.raw, null, 2)
+    setRawInfoDialog({
+      kind,
+      account,
+      fetchedAt: result.fetched_at,
+      refreshedFields: result.refreshed_fields ?? {},
+      rawEndpoint: result.raw_endpoint,
+      planSource: result.plan_source,
+      rawText: rawText || '{}',
+    })
+  }
+
+  const handleViewAuthInfo = async (account: AccountRow) => {
+    setAuthInfoLoadingIds((prev) => new Set(prev).add(account.id))
     try {
-      const result = await api.getAccountRawInfo(account.id)
-      const rawText = JSON.stringify(result.raw, null, 2)
-      setRawInfoDialog({
-        account,
-        fetchedAt: result.fetched_at,
-        refreshedFields: result.refreshed_fields ?? {},
-        rawText: rawText || '{}',
-      })
+      const result = await api.getAccountAuthInfo(account.id)
+      openRawInfoDialog('auth', account, result)
       showToast(result.message || t('accounts.rawInfoFetchSuccess'))
       void reloadSilently()
     } catch (error) {
       showToast(t('accounts.rawInfoFetchFailed', { error: getErrorMessage(error) }), 'error')
     } finally {
-      setRawInfoLoadingIds((prev) => {
+      setAuthInfoLoadingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(account.id)
+        return next
+      })
+    }
+  }
+
+  const handleViewQuotaInfo = async (account: AccountRow) => {
+    setQuotaInfoLoadingIds((prev) => new Set(prev).add(account.id))
+    try {
+      const result = await api.getAccountQuotaInfo(account.id)
+      openRawInfoDialog('quota', account, result)
+      showToast(result.message || t('accounts.rawInfoFetchSuccess'))
+      void reloadSilently()
+    } catch (error) {
+      showToast(t('accounts.rawInfoFetchFailed', { error: getErrorMessage(error) }), 'error')
+    } finally {
+      setQuotaInfoLoadingIds((prev) => {
         const next = new Set(prev)
         next.delete(account.id)
         return next
@@ -1052,11 +1085,21 @@ export default function Accounts() {
                               variant="outline"
                               size="icon"
                               className="h-7 w-8 px-0"
-                              disabled={rawInfoLoadingIds.has(account.id)}
-                              onClick={() => void handleViewRawInfo(account)}
-                              title={t('accounts.viewRawInfo')}
+                              disabled={authInfoLoadingIds.has(account.id)}
+                              onClick={() => void handleViewAuthInfo(account)}
+                              title={t('accounts.viewAuthInfo')}
                             >
-                              <FileJson className={`size-3.5 ${rawInfoLoadingIds.has(account.id) ? 'animate-spin' : ''}`} />
+                              <FileText className={`size-3.5 ${authInfoLoadingIds.has(account.id) ? 'animate-spin' : ''}`} />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-7 w-8 px-0"
+                              disabled={quotaInfoLoadingIds.has(account.id)}
+                              onClick={() => void handleViewQuotaInfo(account)}
+                              title={t('accounts.viewQuotaInfo')}
+                            >
+                              <FileJson className={`size-3.5 ${quotaInfoLoadingIds.has(account.id) ? 'animate-spin' : ''}`} />
                             </Button>
                             <Button
                               variant="outline"
@@ -1474,7 +1517,7 @@ export default function Accounts() {
 
         <Modal
           show={rawInfoDialog !== null}
-          title={t('accounts.rawInfoModalTitle', {
+          title={t(rawInfoDialog?.kind === 'auth' ? 'accounts.authInfoModalTitle' : 'accounts.quotaInfoModalTitle', {
             account: rawInfoDialog?.account.email || `ID ${rawInfoDialog?.account.id ?? ''}`,
           })}
           contentClassName="sm:max-w-[960px]"
@@ -1486,6 +1529,16 @@ export default function Accounts() {
                 <div>
                   {t('accounts.rawInfoFetchedAt')}: {formatBeijingTime(rawInfoDialog.fetchedAt)}
                 </div>
+                {rawInfoDialog.rawEndpoint ? (
+                  <div>
+                    {t('accounts.rawInfoEndpoint')}: {rawInfoDialog.rawEndpoint}
+                  </div>
+                ) : null}
+                {rawInfoDialog.planSource ? (
+                  <div>
+                    {t('accounts.rawInfoPlanSource')}: {rawInfoDialog.planSource}
+                  </div>
+                ) : null}
                 <div className="space-y-1">
                   <div>{t('accounts.rawInfoRefreshedFields')}:</div>
                   {Object.keys(rawInfoDialog.refreshedFields).length > 0 ? (
