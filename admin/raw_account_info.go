@@ -361,13 +361,14 @@ func hasCliproxyProfile(profile cliproxyProfile) bool {
 
 func pickBestPlanSnapshot(snapshots []openAISnapshot) (plan string, source string, raw []byte, endpoint string) {
 	for _, snapshot := range snapshots {
-		if snapshot.Err != nil || len(snapshot.Raw) == 0 {
-			continue
-		}
-		if len(raw) == 0 {
+		// 优先记录首个有响应体的数据（即使是上游错误，也要给前端原样展示，避免出现空 {}）。
+		if len(snapshot.Raw) > 0 && len(raw) == 0 {
 			raw = snapshot.Raw
 			endpoint = snapshot.Endpoint
 			source = snapshot.PlanSource
+		}
+		if snapshot.Err != nil || len(snapshot.Raw) == 0 {
+			continue
 		}
 		if isPlanBetter(plan, snapshot.PlanType) {
 			plan = snapshot.PlanType

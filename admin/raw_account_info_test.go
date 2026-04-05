@@ -93,3 +93,33 @@ func TestDetectPlanFromPayload_MeSubscriptionFlag(t *testing.T) {
 		t.Fatal("source should not be empty")
 	}
 }
+
+func TestPickBestPlanSnapshot_FallbackToErrorBody(t *testing.T) {
+	snapshots := []openAISnapshot{
+		{
+			Endpoint: openAIWhamAccountCheckURL,
+			Raw:      []byte(`{"error":{"message":"forbidden"}}`),
+			Err:      assertError("upstream 403"),
+		},
+	}
+
+	plan, source, raw, endpoint := pickBestPlanSnapshot(snapshots)
+	if plan != "" {
+		t.Fatalf("plan = %q, want empty", plan)
+	}
+	if source != "" {
+		t.Fatalf("source = %q, want empty", source)
+	}
+	if endpoint != openAIWhamAccountCheckURL {
+		t.Fatalf("endpoint = %q, want %q", endpoint, openAIWhamAccountCheckURL)
+	}
+	if string(raw) != `{"error":{"message":"forbidden"}}` {
+		t.Fatalf("raw = %q, want fallback error body", string(raw))
+	}
+}
+
+func assertError(msg string) error { return errString(msg) }
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
