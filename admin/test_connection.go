@@ -119,13 +119,8 @@ func (h *Handler) TestConnection(c *gin.Context) {
 			}
 		case "response.completed":
 			account.ClearLastFailureDetail()
-			if _, cooldownReason, active := account.GetCooldownSnapshot(); active && cooldownReason == "full_usage" {
-				if !h.store.MarkFullUsageCooldownFromSnapshot(account) {
-					h.store.ClearCooldown(account)
-				}
-			} else {
-				h.store.ClearCooldown(account)
-			}
+			// 测试成功即重置冷却状态，用量限制由调度器自行判断
+			h.store.ClearCooldown(account)
 			duration := time.Since(start).Milliseconds()
 			sendTestEvent(c, testEvent{
 				Type: "content",
@@ -329,13 +324,8 @@ func (h *Handler) BatchTest(c *gin.Context) {
 					h.store.PersistUsageSnapshot(acc, usagePct)
 				}
 				acc.ClearLastFailureDetail()
-				if _, cooldownReason, active := acc.GetCooldownSnapshot(); active && cooldownReason == "full_usage" {
-					if !h.store.MarkFullUsageCooldownFromSnapshot(acc) {
-						h.store.ClearCooldown(acc)
-					}
-				} else {
-					h.store.ClearCooldown(acc)
-				}
+				// 测试成功即重置冷却状态，用量限制由调度器自行判断
+				h.store.ClearCooldown(acc)
 				atomic.AddInt64(&successCount, 1)
 			case proxy.IsUnauthorizedLikeStatus(resp.StatusCode, errBody):
 				acc.SetLastFailureDetail(displayStatus, errCode, errMsg)
