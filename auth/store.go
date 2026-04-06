@@ -628,6 +628,19 @@ func (a *Account) GetUsagePercent5h() (float64, bool) {
 	return a.UsagePercent5h, a.UsagePercent5hValid
 }
 
+// ClearUsageCache 清除内存中的用量缓存，下次请求时从上游重新获取
+func (a *Account) ClearUsageCache() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.UsagePercent7d = 0
+	a.UsagePercent7dValid = false
+	a.Reset7dAt = time.Time{}
+	a.UsagePercent5h = 0
+	a.UsagePercent5hValid = false
+	a.Reset5hAt = time.Time{}
+	a.UsageUpdatedAt = time.Time{}
+}
+
 // SetReset7dAt 设置 7d 窗口重置时间
 func (a *Account) SetReset7dAt(t time.Time) {
 	a.mu.Lock()

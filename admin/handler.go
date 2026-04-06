@@ -1544,6 +1544,54 @@ func (h *Handler) ToggleAccountLock(c *gin.Context) {
 	}
 }
 
+// ResetAccountStatus 重置单个账号状态为正常
+func (h *Handler) ResetAccountStatus(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "无效的账号 ID")
+		return
+	}
+
+	acc := h.store.FindByID(id)
+	if acc == nil {
+		writeError(c, http.StatusNotFound, "账号不在运行时池中")
+		return
+	}
+
+	h.store.ClearCooldown(acc)
+	acc.ClearUsageCache()
+	writeMessage(c, http.StatusOK, "账号状态已重置")
+}
+
+// BatchResetStatus 批量重置账号状态为正常
+func (h *Handler) BatchResetStatus(c *gin.Context) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		writeError(c, http.StatusBadRequest, "请提供要重置的账号 ID 列表")
+		return
+	}
+
+	success := 0
+	fail := 0
+	for _, id := range req.IDs {
+		acc := h.store.FindByID(id)
+		if acc == nil {
+			fail++
+			continue
+		}
+		h.store.ClearCooldown(acc)
+		acc.ClearUsageCache()
+		success++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("已重置 %d 个账号状态", success),
+		"success": success,
+		"failed":  fail,
+	})
+}
 func (h *Handler) refreshSingleAccount(ctx context.Context, id int64) error {
 	if h == nil || h.store == nil {
 		return fmt.Errorf("账号池未初始化")
