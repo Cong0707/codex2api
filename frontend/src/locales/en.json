@@ -375,7 +375,14 @@
     "unlockHint": "Unlocked accounts will be subject to auto-cleanup",
     "filterLocked": "Locked",
     "batchLockDone": "Batch lock complete: {{success}} succeeded, {{fail}} failed",
-    "batchUnlockDone": "Batch unlock complete: {{success}} succeeded, {{fail}} failed"
+    "batchUnlockDone": "Batch unlock complete: {{success}} succeeded, {{fail}} failed",
+    "resetStatus": "Reset Status",
+    "resetStatusHint": "Reset account status to normal",
+    "resetStatusSuccess": "Account status has been reset",
+    "resetStatusFailed": "Reset failed: {{error}}",
+    "batchResetStatus": "Reset Status",
+    "batchResetStatusDone": "Batch reset complete: {{success}} succeeded, {{fail}} failed",
+    "testAutoReset": "Test passed, account status has been automatically restored to normal"
   },
   "status": {
     "active": "Available",

@@ -2423,6 +2423,13 @@ function TestConnectionModal({
             </pre>
           </div>
         )}
+
+        {status === 'success' && (
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-400">
+            <RotateCcw className="size-4 shrink-0" />
+            {t('accounts.testAutoReset')}
+          </div>
+        )}
       </div>
     </Modal>
   )

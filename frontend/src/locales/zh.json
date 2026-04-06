@@ -375,7 +375,14 @@
     "unlockHint": "解锁后，账号将正常参与自动清理",
     "filterLocked": "已锁定",
     "batchLockDone": "批量锁定完成：成功 {{success}}，失败 {{fail}}",
-    "batchUnlockDone": "批量解锁完成：成功 {{success}}，失败 {{fail}}"
+    "batchUnlockDone": "批量解锁完成：成功 {{success}}，失败 {{fail}}",
+    "resetStatus": "重置状态",
+    "resetStatusHint": "将账号状态重置为正常",
+    "resetStatusSuccess": "账号状态已重置",
+    "resetStatusFailed": "重置失败：{{error}}",
+    "batchResetStatus": "重置状态",
+    "batchResetStatusDone": "批量重置完成：成功 {{success}}，失败 {{fail}}",
+    "testAutoReset": "测试成功，账号状态已自动恢复为正常"
   },
   "status": {
     "active": "可用",
