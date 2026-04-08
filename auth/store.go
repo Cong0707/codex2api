@@ -1112,6 +1112,24 @@ func (s *Store) schedulerPlanBonus(planType string) float64 {
 	return 0
 }
 
+func (s *Store) isPreferredPlanEnabled() bool {
+	if s == nil {
+		return false
+	}
+	return s.GetPreferredPlanType() != ""
+}
+
+func (s *Store) isPreferredPlan(planType string) bool {
+	if s == nil {
+		return false
+	}
+	preferred := s.GetPreferredPlanType()
+	if preferred == "" {
+		return false
+	}
+	return matchPreferredPlan(planType, preferred)
+}
+
 // GetProxyURL 获取全局代理地址
 func (s *Store) GetProxyURL() string {
 	s.mu.RLock()
@@ -1477,13 +1495,19 @@ func (s *Store) NextExcluding(exclude map[int64]bool) *Account {
 	defer s.mu.RUnlock()
 
 	var best *Account
+	var preferredBest *Account
 	bestPriority := -1
 	bestScore := -math.MaxFloat64
 	var bestLoad int64 = math.MaxInt64
+	preferredBestPriority := -1
+	preferredBestScore := -math.MaxFloat64
+	var preferredBestLoad int64 = math.MaxInt64
 	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
 
 	// 收集所有可用候选（用于公平调度）
 	var candidates []*Account
+	var preferredCandidates []*Account
+	preferredPlanEnabled := s.isPreferredPlanEnabled()
 
 	for _, acc := range s.accounts {
 		if exclude != nil && exclude[acc.DBID] {
@@ -1495,12 +1519,17 @@ func (s *Store) NextExcluding(exclude map[int64]bool) *Account {
 
 		load := atomic.LoadInt64(&acc.ActiveRequests)
 		tier, score, limit := acc.schedulerSnapshot(maxConcurrency)
-		score += s.schedulerPlanBonus(acc.GetPlanType())
+		planType := acc.GetPlanType()
+		score += s.schedulerPlanBonus(planType)
 		if limit <= 0 || load >= limit {
 			continue
 		}
 
 		candidates = append(candidates, acc)
+		isPreferred := preferredPlanEnabled && s.isPreferredPlan(planType)
+		if isPreferred {
+			preferredCandidates = append(preferredCandidates, acc)
+		}
 
 		priority := tierPriority(tier)
 		if priority > bestPriority ||
@@ -1512,6 +1541,21 @@ func (s *Store) NextExcluding(exclude map[int64]bool) *Account {
 			bestLoad = load
 			best = acc
 		}
+		if isPreferred && (priority > preferredBestPriority ||
+			(priority == preferredBestPriority && (score > preferredBestScore ||
+				(score == preferredBestScore && load < preferredBestLoad) ||
+				(score == preferredBestScore && load == preferredBestLoad && fastRandN(2) == 0)))) {
+			preferredBestPriority = priority
+			preferredBestScore = score
+			preferredBestLoad = load
+			preferredBest = acc
+		}
+	}
+
+	if preferredBest != nil {
+		best = preferredBest
+		bestPriority = preferredBestPriority
+		candidates = preferredCandidates
 	}
 
 	// Warm 公平调度：15% 概率随机选一个非 best 候选，避免 warm 饥饿

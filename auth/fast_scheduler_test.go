@@ -35,6 +35,25 @@ func TestFastSchedulerAcquirePrefersHealthyTier(t *testing.T) {
 	}
 }
 
+func TestFastSchedulerAcquirePrefersConfiguredPlanAcrossTiers(t *testing.T) {
+	warmPreferred := newFastSchedulerTestAccount(1, HealthTierWarm, 70, 2)
+	warmPreferred.PlanType = "plus"
+	healthyNormal := newFastSchedulerTestAccount(2, HealthTierHealthy, 98, 2)
+	healthyNormal.PlanType = "free"
+
+	scheduler := NewFastScheduler(2, "plus", 20)
+	scheduler.Rebuild([]*Account{healthyNormal, warmPreferred})
+
+	got := scheduler.Acquire()
+	if got == nil {
+		t.Fatal("Acquire() returned nil")
+	}
+	defer scheduler.Release(got)
+	if got.DBID != warmPreferred.DBID {
+		t.Fatalf("Acquire() picked dbID=%d, want preferred plan dbID=%d", got.DBID, warmPreferred.DBID)
+	}
+}
+
 func TestFastSchedulerRespectsConcurrencyLimit(t *testing.T) {
 	acc := newFastSchedulerTestAccount(1, HealthTierHealthy, 100, 1)
 
@@ -215,6 +234,29 @@ func TestStoreFastSchedulerTracksCooldownTransition(t *testing.T) {
 		t.Fatal("Next() returned nil after ClearCooldown()")
 	}
 	store.Release(got)
+}
+
+func TestStoreNextPrefersConfiguredPlanAcrossTiers(t *testing.T) {
+	warmPreferred := newFastSchedulerTestAccount(1, HealthTierWarm, 70, 2)
+	warmPreferred.PlanType = "plus"
+	healthyNormal := newFastSchedulerTestAccount(2, HealthTierHealthy, 98, 2)
+	healthyNormal.PlanType = "free"
+
+	store := &Store{
+		accounts:       []*Account{healthyNormal, warmPreferred},
+		maxConcurrency: 2,
+	}
+	store.preferredPlanType.Store("plus")
+	atomic.StoreInt64(&store.preferredPlanBonus, 20)
+
+	got := store.Next()
+	if got == nil {
+		t.Fatal("Next() returned nil")
+	}
+	defer store.Release(got)
+	if got.DBID != warmPreferred.DBID {
+		t.Fatalf("Next() picked dbID=%d, want preferred plan dbID=%d", got.DBID, warmPreferred.DBID)
+	}
 }
 
 func TestFastSchedulerEnabledFromEnv(t *testing.T) {

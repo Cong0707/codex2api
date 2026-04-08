@@ -14,9 +14,10 @@ var fastSchedulerTierOrder = []AccountHealthTier{
 }
 
 type fastSchedulerEntry struct {
-	acc   *Account
-	dbID  int64
-	score float64
+	acc       *Account
+	dbID      int64
+	score     float64
+	preferred bool
 }
 
 type fastSchedulerPosition struct {
@@ -39,6 +40,7 @@ type FastScheduler struct {
 	buckets            map[AccountHealthTier][]fastSchedulerEntry
 	positions          map[int64]fastSchedulerPosition
 	cursors            [3]atomic.Uint64
+	preferredCursors   [3]atomic.Uint64
 	provenBounds       [3]int           // 每个 tier 桶中验证过的账号数量（排在前面）
 	provenCurs         [3]atomic.Uint64 // 验证账号专用 round-robin 游标
 }
@@ -113,10 +115,12 @@ func (s *FastScheduler) Rebuild(accounts []*Account) {
 			continue
 		}
 		score += s.planBonusForAccount(acc)
+		preferred := s.isPreferredAccount(acc)
 		s.buckets[tier] = append(s.buckets[tier], fastSchedulerEntry{
-			acc:   acc,
-			dbID:  acc.DBID,
-			score: score,
+			acc:       acc,
+			dbID:      acc.DBID,
+			score:     score,
+			preferred: preferred,
 		})
 	}
 
@@ -188,6 +192,18 @@ func (s *FastScheduler) AcquireExcluding(exclude map[int64]bool) *Account {
 
 	s.mu.RLock()
 	baseLimit := s.baseLimit
+	if s.hasPreferredPlan() {
+		for tierIdx, tier := range fastSchedulerTierOrder {
+			bucket := s.buckets[tier]
+			if len(bucket) == 0 {
+				continue
+			}
+			if acc := s.scanPreferred(bucket, &s.preferredCursors[tierIdx], baseLimit, now, exclude); acc != nil {
+				s.mu.RUnlock()
+				return acc
+			}
+		}
+	}
 	for tierIdx, tier := range fastSchedulerTierOrder {
 		bucket := s.buckets[tier]
 		if len(bucket) == 0 {
@@ -223,6 +239,32 @@ func (s *FastScheduler) scanRange(bucket []fastSchedulerEntry, rangeStart, range
 	for offset := 0; offset < rangeLen; offset++ {
 		entry := bucket[rangeStart+(start+offset)%rangeLen]
 		if entry.acc == nil {
+			continue
+		}
+		if exclude != nil && exclude[entry.dbID] {
+			continue
+		}
+		_, _, limit, available := entry.acc.fastSchedulerSnapshot(baseLimit, now)
+		if !available || limit <= 0 {
+			continue
+		}
+		if !tryAcquireAccount(entry.acc, limit) {
+			continue
+		}
+		return entry.acc
+	}
+	return nil
+}
+
+func (s *FastScheduler) scanPreferred(bucket []fastSchedulerEntry, cursor *atomic.Uint64, baseLimit int64, now time.Time, exclude map[int64]bool) *Account {
+	bucketLen := len(bucket)
+	if bucketLen == 0 {
+		return nil
+	}
+	start := int(cursor.Add(1)-1) % bucketLen
+	for offset := 0; offset < bucketLen; offset++ {
+		entry := bucket[(start+offset)%bucketLen]
+		if !entry.preferred || entry.acc == nil {
 			continue
 		}
 		if exclude != nil && exclude[entry.dbID] {
@@ -276,9 +318,10 @@ func (s *FastScheduler) insertLocked(acc *Account, now time.Time) {
 	score += s.planBonusForAccount(acc)
 
 	entries := append(s.buckets[tier], fastSchedulerEntry{
-		acc:   acc,
-		dbID:  acc.DBID,
-		score: score,
+		acc:       acc,
+		dbID:      acc.DBID,
+		score:     score,
+		preferred: s.isPreferredAccount(acc),
 	})
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].score == entries[j].score {
@@ -348,6 +391,24 @@ func (s *FastScheduler) planBonusForAccount(acc *Account) float64 {
 		return 0
 	}
 	return s.planBonusForPlan(acc.GetPlanType())
+}
+
+func (s *FastScheduler) hasPreferredPlan() bool {
+	return s != nil && s.preferredPlan != ""
+}
+
+func (s *FastScheduler) isPreferredAccount(acc *Account) bool {
+	if s == nil || acc == nil {
+		return false
+	}
+	return s.isPreferredPlan(acc.GetPlanType())
+}
+
+func (s *FastScheduler) isPreferredPlan(plan string) bool {
+	if s == nil || s.preferredPlan == "" {
+		return false
+	}
+	return matchPreferredPlan(plan, s.preferredPlan)
 }
 
 func (s *FastScheduler) planBonusForPlan(plan string) float64 {
