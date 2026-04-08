@@ -2163,8 +2163,8 @@ func (h *Handler) compute429Cooldown(account *auth.Account, body []byte, resp *h
 		// Free 只有 7d 窗口，429 = 额度耗尽，冷却 7 天
 		return 7 * 24 * time.Hour
 
-	case "plus", "team", "pro", "enterprise":
-		// Team/Pro 有 5h + 7d 双窗口，需要判断是哪个窗口触发了限制
+	case "team", "teamplus", "pro", "plus", "enterprise":
+		// Team/Pro/Plus 有 5h + 7d 双窗口，需要判断是哪个窗口触发了限制
 		return h.detectTeamCooldownWindow(resp)
 
 	default:
@@ -2173,7 +2173,7 @@ func (h *Handler) compute429Cooldown(account *auth.Account, body []byte, resp *h
 	}
 }
 
-// detectTeamCooldownWindow 通过响应头判断 Team/Pro 账号是哪个窗口触发的限制
+// detectTeamCooldownWindow 通过响应头判断 Team/Pro/Plus 账号是哪个窗口触发的限制
 func (h *Handler) detectTeamCooldownWindow(resp *http.Response) time.Duration {
 	if resp == nil {
 		return 5 * time.Hour // 保守默认
