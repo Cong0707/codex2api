@@ -47,6 +47,10 @@ type Handler struct {
 	// 图表聚合内存缓存（10秒 TTL）
 	chartCacheMu   sync.RWMutex
 	chartCacheData map[string]*chartCacheEntry
+
+	// 自动套餐识别：记录最近一次 wham/usage 同步时间，避免高频请求
+	planSyncMu sync.Mutex
+	planSyncAt map[int64]time.Time
 }
 
 type chartCacheEntry struct {
@@ -69,6 +73,7 @@ func NewHandler(store *auth.Store, db *database.DB, tc cache.TokenCache, rl *pro
 		cacheLabel:     tc.Label(),
 		adminSecretEnv: adminSecretEnv,
 		chartCacheData: make(map[string]*chartCacheEntry),
+		planSyncAt:     make(map[int64]time.Time),
 	}
 	handler.refreshAccount = handler.refreshSingleAccount
 	return handler
