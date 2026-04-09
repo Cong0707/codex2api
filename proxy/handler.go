@@ -593,8 +593,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	registerOpenAIRoutes := func(group *gin.RouterGroup) {
 		group.POST("/chat/completions", h.ChatCompletions)
 		group.POST("/responses", h.Responses)
-		// 兼容部分客户端将 compact 请求打到 /responses/compact。
-		group.POST("/responses/compact", h.Responses)
+		group.POST("/responses/compact", h.ResponsesCompact)
 		group.POST("/messages", h.Messages)
 		group.GET("/models", h.ListModels)
 	}
@@ -616,7 +615,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	codexDirect.POST("/responses/*subpath", func(c *gin.Context) {
 		subpath := strings.TrimSpace(c.Param("subpath"))
 		if subpath == "/compact" || strings.HasPrefix(subpath, "/compact/") {
-			h.Responses(c)
+			h.ResponsesCompact(c)
 			return
 		}
 		h.Responses(c)
@@ -1282,6 +1281,206 @@ func (h *Handler) Responses(c *gin.Context) {
 		}
 		logUpstreamAttemptResult(c, "/v1/responses", attempt+1, account, proxyURL, outcome.logStatusCode, attemptDuration, requestStartedAt, "")
 		h.store.Release(account)
+		return
+	}
+
+	// 所有重试都失败
+	if lastErr != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{"message": "上游请求失败: " + lastErr.Error(), "type": "upstream_error"},
+		})
+	} else if lastStatusCode != 0 {
+		h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+	}
+}
+
+// ResponsesCompact 处理 /v1/responses/compact 请求（非流式压缩接口，透传到上游 /responses/compact）
+func (h *Handler) ResponsesCompact(c *gin.Context) {
+	// 1. 读取请求体
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Failed to read request body", api.ErrorTypeInvalidRequest))
+		return
+	}
+
+	// Validate request
+	validator := api.NewValidator(rawBody)
+	rules := api.ResponsesAPIValidationRules()
+	rules["model"] = append(rules["model"], api.ModelValidator(SupportedModels))
+	result := validator.ValidateRequest(rules)
+	if !result.Valid {
+		api.SendError(c, validator.ToAPIError())
+		return
+	}
+
+	if len(rawBody) > security.MaxRequestBodySize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error": gin.H{"message": "请求体过大", "type": "invalid_request_error"},
+		})
+		return
+	}
+
+	model := gjson.GetBytes(rawBody, "model").String()
+	if err := security.ValidateModelName(model); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "model 参数无效", "type": "invalid_request_error"},
+		})
+		return
+	}
+	if model == "" {
+		api.SendMissingFieldError(c, "model")
+		return
+	}
+
+	rawBody = normalizeServiceTierField(rawBody)
+	sessionID := ResolveSessionID(c.Request.Header, rawBody)
+	reasoningEffort := extractReasoningEffort(rawBody)
+	serviceTier := extractServiceTier(rawBody)
+	if serviceTier != "" {
+		c.Set("x-service-tier", serviceTier)
+	}
+
+	// compact 强制非流式
+	rawBody, _ = sjson.SetBytes(rawBody, "stream", false)
+
+	// 准备上游请求体
+	codexBody, _ := PrepareResponsesBody(rawBody)
+
+	// 带重试的上游请求
+	maxRetries := h.getMaxRetries()
+	var lastErr error
+	var lastStatusCode int
+	var lastBody []byte
+	excludeAccounts := make(map[int64]bool)
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		account, stickyProxyURL := h.nextAccountForSession(sessionID, excludeAccounts)
+		if account == nil {
+			account, stickyProxyURL = h.store.WaitForSessionAvailable(c.Request.Context(), sessionID, 30*time.Second, excludeAccounts)
+			if account == nil {
+				if lastStatusCode == http.StatusTooManyRequests && len(lastBody) > 0 {
+					h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+					return
+				}
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error": gin.H{"message": "无可用账号，请稍后重试", "type": "server_error"},
+				})
+				return
+			}
+		}
+
+		start := time.Now()
+		proxyURL := stickyProxyURL
+		if proxyURL == "" {
+			proxyURL = h.store.NextProxy()
+		}
+
+		apiKey := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+		apiKey = strings.TrimSpace(apiKey)
+		deviceCfg := h.deviceCfg
+		if deviceCfg == nil {
+			deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
+		}
+		downstreamHeaders := c.Request.Header.Clone()
+
+		resp, reqErr := ExecuteCompactRequest(c.Request.Context(), account, codexBody, sessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders)
+		durationMs := int(time.Since(start).Milliseconds())
+
+		if reqErr != nil {
+			if kind := classifyTransportFailure(reqErr); kind != "" {
+				h.store.ReportRequestFailure(account, kind, time.Duration(durationMs)*time.Millisecond)
+			}
+			h.store.Release(account)
+			h.store.UnbindSessionAffinity(sessionID, account.ID())
+			excludeAccounts[account.ID()] = true
+
+			if !IsRetryableError(reqErr) && classifyTransportFailure(reqErr) == "" {
+				ErrorToGinResponse(c, reqErr)
+				return
+			}
+
+			log.Printf("compact 上游请求失败 (attempt %d): %v", attempt+1, reqErr)
+			lastErr = reqErr
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			if kind := classifyHTTPFailure(resp.StatusCode); kind != "" {
+				h.store.ReportRequestFailure(account, kind, time.Duration(durationMs)*time.Millisecond)
+			}
+			if usagePct, ok := parseCodexUsageHeaders(resp, account); ok {
+				h.store.PersistUsageSnapshot(account, usagePct)
+			}
+			errBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			h.store.Release(account)
+			h.store.UnbindSessionAffinity(sessionID, account.ID())
+			excludeAccounts[account.ID()] = true
+
+			logUpstreamError("/v1/responses/compact", resp.StatusCode, model, account.ID(), errBody)
+			h.logUsageForRequest(c, &database.UsageLogInput{
+				AccountID:        account.ID(),
+				Endpoint:         "/v1/responses/compact",
+				Model:            model,
+				StatusCode:       resp.StatusCode,
+				DurationMs:       durationMs,
+				ReasoningEffort:  reasoningEffort,
+				InboundEndpoint:  "/v1/responses/compact",
+				UpstreamEndpoint: "/v1/responses/compact",
+				ServiceTier:      serviceTier,
+			})
+			h.applyCooldown(account, resp.StatusCode, errBody, resp)
+
+			if isRetryableStatus(resp.StatusCode) && attempt < maxRetries {
+				lastStatusCode = resp.StatusCode
+				lastBody = errBody
+				continue
+			}
+
+			h.sendFinalUpstreamError(c, resp.StatusCode, errBody)
+			return
+		}
+
+		// 成功：直接透传响应体
+		if usagePct, ok := parseCodexUsageHeaders(resp, account); ok {
+			h.store.PersistUsageSnapshot(account, usagePct)
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// 提取 usage 用于日志
+		promptTokens := int(gjson.GetBytes(respBody, "usage.input_tokens").Int())
+		completionTokens := int(gjson.GetBytes(respBody, "usage.output_tokens").Int())
+		totalTokens := int(gjson.GetBytes(respBody, "usage.total_tokens").Int())
+		reasoningTokens := int(gjson.GetBytes(respBody, "usage.output_tokens_details.reasoning_tokens").Int())
+		cachedTokens := int(gjson.GetBytes(respBody, "usage.input_tokens_details.cached_tokens").Int())
+
+		actualServiceTier := gjson.GetBytes(respBody, "service_tier").String()
+		resolvedServiceTier := resolveServiceTier(actualServiceTier, serviceTier)
+
+		totalDuration := int(time.Since(start).Milliseconds())
+		h.logUsageForRequest(c, &database.UsageLogInput{
+			AccountID:        account.ID(),
+			Endpoint:         "/v1/responses/compact",
+			Model:            model,
+			StatusCode:       http.StatusOK,
+			DurationMs:       totalDuration,
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      totalTokens,
+			InputTokens:      promptTokens,
+			OutputTokens:     completionTokens,
+			ReasoningTokens:  reasoningTokens,
+			CachedTokens:     cachedTokens,
+			ReasoningEffort:  reasoningEffort,
+			InboundEndpoint:  "/v1/responses/compact",
+			UpstreamEndpoint: "/v1/responses/compact",
+			ServiceTier:      resolvedServiceTier,
+		})
+
+		h.store.Release(account)
+		c.Data(http.StatusOK, "application/json", respBody)
 		return
 	}
 
