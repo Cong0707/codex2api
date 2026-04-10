@@ -99,6 +99,87 @@ func TestTranslateRequest_FillsMissingArrayItemsInToolSchema(t *testing.T) {
 	}
 }
 
+func TestPrepareResponsesBody_FillsMissingArrayItemsInToolSchema(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"input":"test",
+		"tools":[
+			{
+				"type":"function",
+				"name":"godot-mcp_node_signal",
+				"parameters":{
+					"type":"object",
+					"properties":{
+						"args":{"type":"array"}
+					}
+				}
+			}
+		]
+	}`)
+
+	got, _ := PrepareResponsesBody(raw)
+
+	items := gjson.GetBytes(got, "tools.0.parameters.properties.args.items")
+	if !items.Exists() || items.Type != gjson.JSON {
+		t.Fatalf("expected array schema items object to be injected, got %s", items.Raw)
+	}
+}
+
+func TestPrepareResponsesBody_DefaultsIncludeForResponses(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"input":"test"
+	}`)
+
+	got, _ := PrepareResponsesBody(raw)
+
+	include := gjson.GetBytes(got, "include")
+	if !include.Exists() || len(include.Array()) != 1 || include.Array()[0].String() != "reasoning.encrypted_content" {
+		t.Fatalf("expected default include for responses, got %s", include.Raw)
+	}
+	if stream := gjson.GetBytes(got, "stream"); !stream.Exists() || !stream.Bool() {
+		t.Fatalf("expected stream to be forced for responses, got %s", stream.Raw)
+	}
+	if store := gjson.GetBytes(got, "store"); !store.Exists() || store.Bool() {
+		t.Fatalf("expected store=false for responses, got %s", store.Raw)
+	}
+}
+
+func TestPrepareCompactResponsesBody_RemovesUnsupportedInjectedFields(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"input":"test"
+	}`)
+
+	got, _ := PrepareCompactResponsesBody(raw)
+
+	for _, field := range []string{"include", "store", "stream"} {
+		if gjson.GetBytes(got, field).Exists() {
+			t.Fatalf("expected %s to be removed for compact body", field)
+		}
+	}
+	input := gjson.GetBytes(got, "input")
+	if !input.Exists() || !input.IsArray() || len(input.Array()) != 1 {
+		t.Fatalf("expected compact input to remain normalized, got %s", input.Raw)
+	}
+	if input.Array()[0].Get("content").String() != "test" {
+		t.Fatalf("expected compact input content to be preserved, got %s", input.Raw)
+	}
+}
+
+func TestPrepareCompactResponsesBody_RemovesClientSuppliedInclude(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"input":"test",
+		"include":["reasoning.encrypted_content"]
+	}`)
+
+	got, _ := PrepareCompactResponsesBody(raw)
+
+	if gjson.GetBytes(got, "include").Exists() {
+		t.Fatalf("expected client-supplied include to be removed for compact body, got %s", string(got))
+	}
+}
 // ==================== Function Calling 测试 ====================
 
 func TestConvertMessagesToInput_ToolRole(t *testing.T) {

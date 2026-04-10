@@ -1334,6 +1334,9 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 
 	rawBody = normalizeServiceTierField(rawBody)
 	sessionID := ResolveSessionID(c.Request.Header, rawBody)
+	downstreamHeaders := c.Request.Header.Clone()
+	apiKey := requestAPIKeyFromHeaders(downstreamHeaders)
+	affinityKey := sessionAffinityKey(sessionID, apiKey)
 	reasoningEffort := extractReasoningEffort(rawBody)
 	serviceTier := extractServiceTier(rawBody)
 	if serviceTier != "" {
@@ -1344,7 +1347,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	rawBody, _ = sjson.SetBytes(rawBody, "stream", false)
 
 	// 准备上游请求体
-	codexBody, _ := PrepareResponsesBody(rawBody)
+	codexBody, _ := PrepareCompactResponsesBody(rawBody)
 
 	// 带重试的上游请求
 	maxRetries := h.getMaxRetries()
@@ -1352,36 +1355,29 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	var lastStatusCode int
 	var lastBody []byte
 	excludeAccounts := make(map[int64]bool)
+	deviceCfg := h.deviceCfg
+	if deviceCfg == nil {
+		deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
+	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		account, stickyProxyURL := h.nextAccountForSession(sessionID, excludeAccounts)
+		account, stickyProxyURL := h.acquireAccountForRequestWithAffinity(c, affinityKey, excludeAccounts)
 		if account == nil {
-			account, stickyProxyURL = h.store.WaitForSessionAvailable(c.Request.Context(), sessionID, 30*time.Second, excludeAccounts)
-			if account == nil {
-				if lastStatusCode == http.StatusTooManyRequests && len(lastBody) > 0 {
-					h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
-					return
-				}
-				c.JSON(http.StatusServiceUnavailable, gin.H{
-					"error": gin.H{"message": "无可用账号，请稍后重试", "type": "server_error"},
-				})
+			if lastStatusCode == http.StatusTooManyRequests && len(lastBody) > 0 {
+				h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
 				return
 			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{"message": "无可用账号，请稍后重试", "type": "server_error"},
+			})
+			return
 		}
 
 		start := time.Now()
-		proxyURL := stickyProxyURL
+		proxyURL := strings.TrimSpace(stickyProxyURL)
 		if proxyURL == "" {
-			proxyURL = h.store.NextProxy()
+			proxyURL = h.store.ResolveProxyForAccount(account)
 		}
-
-		apiKey := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-		apiKey = strings.TrimSpace(apiKey)
-		deviceCfg := h.deviceCfg
-		if deviceCfg == nil {
-			deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
-		}
-		downstreamHeaders := c.Request.Header.Clone()
 
 		resp, reqErr := ExecuteCompactRequest(c.Request.Context(), account, codexBody, sessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders)
 		durationMs := int(time.Since(start).Milliseconds())
@@ -1391,7 +1387,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 				h.store.ReportRequestFailure(account, kind, time.Duration(durationMs)*time.Millisecond)
 			}
 			h.store.Release(account)
-			h.store.UnbindSessionAffinity(sessionID, account.ID())
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 
 			if !IsRetryableError(reqErr) && classifyTransportFailure(reqErr) == "" {
@@ -1405,16 +1401,16 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			if kind := classifyHTTPFailure(resp.StatusCode); kind != "" {
+			errBody, _ := io.ReadAll(resp.Body)
+			if kind := classifyHTTPFailure(resp.StatusCode, errBody); kind != "" {
 				h.store.ReportRequestFailure(account, kind, time.Duration(durationMs)*time.Millisecond)
 			}
 			if usagePct, ok := parseCodexUsageHeaders(resp, account); ok {
 				h.store.PersistUsageSnapshot(account, usagePct)
 			}
-			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			h.store.Release(account)
-			h.store.UnbindSessionAffinity(sessionID, account.ID())
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 
 			logUpstreamError("/v1/responses/compact", resp.StatusCode, model, account.ID(), errBody)
@@ -1431,7 +1427,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			})
 			h.applyCooldown(account, resp.StatusCode, errBody, resp)
 
-			if isRetryableStatus(resp.StatusCode) && attempt < maxRetries {
+			if isRetryableStatus(resp.StatusCode, errBody) && attempt < maxRetries {
 				lastStatusCode = resp.StatusCode
 				lastBody = errBody
 				continue

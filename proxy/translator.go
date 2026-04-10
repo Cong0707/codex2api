@@ -9,6 +9,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// maxTools 上游 Codex API 允许的最大工具数量
 const maxTools = 128
 
 // ==================== 请求翻译: OpenAI Chat Completions → Codex Responses ====================
@@ -69,21 +70,182 @@ func TranslateRequest(rawJSON []byte) ([]byte, error) {
 	return result, nil
 }
 
+// PrepareResponsesBody 将 Responses API 原始请求转换为上游可接受的格式
+// 采用 Unmarshal→map 操作→Marshal 模式，替代逐字段 sjson 操作
+// 返回: (处理后的 body, 展开后的 input JSON 原始文本)
+func PrepareResponsesBody(rawBody []byte) ([]byte, string) {
+	var body map[string]any
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		return rawBody, ""
+	}
+
+	// 1. 强制设置 Codex 必需字段
+	body["stream"] = true
+	body["store"] = false
+	if _, ok := body["include"]; !ok {
+		body["include"] = []string{"reasoning.encrypted_content"}
+	}
+
+	// 2. 字符串 input → 数组包装（Codex 要求 input 为 list）
+	if inputStr, ok := body["input"].(string); ok {
+		body["input"] = []map[string]string{
+			{"role": "user", "content": inputStr},
+		}
+	}
+
+	// 3. reasoning_effort → reasoning.effort 自动转换 + 钳位
+	if re, ok := body["reasoning_effort"].(string); ok && re != "" {
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning == nil {
+			reasoning = map[string]any{}
+		}
+		if _, hasEffort := reasoning["effort"]; !hasEffort {
+			reasoning["effort"] = re
+			body["reasoning"] = reasoning
+		}
+	}
+	if reasoning, ok := body["reasoning"].(map[string]any); ok {
+		if effort, ok := reasoning["effort"].(string); ok && effort != "" {
+			reasoning["effort"] = normalizeReasoningEffort(effort)
+		}
+	}
+
+	// 4. service tier 清理（fast 映射为上游接受的 priority）
+	tier := ""
+	if v, ok := body["service_tier"].(string); ok {
+		tier = strings.TrimSpace(v)
+	} else if v, ok := body["serviceTier"].(string); ok {
+		tier = strings.TrimSpace(v)
+	}
+	delete(body, "serviceTier")
+	if !isAllowedServiceTier(tier) {
+		delete(body, "service_tier")
+	} else {
+		body["service_tier"] = upstreamServiceTier(tier)
+	}
+
+	// 5. 工具描述补充 + schema 清理 + 上游数量限制
+	if tools, ok := body["tools"].([]any); ok {
+		if len(tools) > maxTools {
+			tools = tools[:maxTools]
+			body["tools"] = tools
+		}
+		toolDescDefaults := map[string]string{
+			"tool_search": "Search through available tools to find the most relevant one for the task.",
+		}
+		for _, t := range tools {
+			toolMap, ok := t.(map[string]any)
+			if !ok {
+				continue
+			}
+			// 补充默认描述
+			if toolType, _ := toolMap["type"].(string); toolType != "" {
+				if defaultDesc, ok := toolDescDefaults[toolType]; ok {
+					desc, _ := toolMap["description"].(string)
+					if desc == "" {
+						toolMap["description"] = defaultDesc
+					}
+				}
+			}
+			// 递归清理不支持的 JSON Schema 关键字，并修正上游要求的结构
+			if params, ok := toolMap["parameters"].(map[string]any); ok {
+				sanitizeSchemaForUpstream(params)
+			}
+		}
+	}
+
+	// 6. 展开 previous_response_id
+	prevID, _ := body["previous_response_id"].(string)
+	if prevID != "" {
+		if cached := getResponseCache(prevID); cached != nil {
+			var cachedItems []any
+			for _, item := range cached {
+				var v any
+				if json.Unmarshal(item, &v) == nil {
+					cachedItems = append(cachedItems, v)
+				}
+			}
+			currentInput, _ := body["input"].([]any)
+			body["input"] = append(cachedItems, currentInput...)
+		}
+	}
+
+	// 保存展开后的 input 原始 JSON（用于响应缓存链路）
+	var expandedInputRaw string
+	if inputVal, ok := body["input"]; ok {
+		if b, err := json.Marshal(inputVal); err == nil {
+			expandedInputRaw = string(b)
+		}
+	}
+
+	// 7. 删除 Codex 不支持的字段
+	for _, field := range []string{
+		"max_output_tokens", "max_tokens", "max_completion_tokens",
+		"temperature", "top_p", "frequency_penalty", "presence_penalty",
+		"logprobs", "top_logprobs", "n", "seed", "stop", "user",
+		"logit_bias", "response_format", "serviceTier",
+		"stream_options", "reasoning_effort", "truncation", "context_management",
+		"disable_response_storage", "verbosity",
+	} {
+		delete(body, field)
+	}
+
+	result, err := json.Marshal(body)
+	if err != nil {
+		return rawBody, expandedInputRaw
+	}
+	return result, expandedInputRaw
+}
+
+// PrepareCompactResponsesBody 将 /responses/compact 请求转换为上游可接受的格式。
+// 它复用通用 Responses 预处理，但会移除 compact 端点不接受的自动注入字段。
+func PrepareCompactResponsesBody(rawBody []byte) ([]byte, string) {
+	body, expandedInputRaw := PrepareResponsesBody(rawBody)
+	body, _ = sjson.DeleteBytes(body, "include")
+	body, _ = sjson.DeleteBytes(body, "store")
+	body, _ = sjson.DeleteBytes(body, "stream")
+	return body, expandedInputRaw
+}
+
+// normalizeReasoningEffort 将 reasoning_effort 钳位到上游支持的值
+func normalizeReasoningEffort(effort string) string {
+	if effort == "" {
+		return ""
+	}
+	switch strings.ToLower(effort) {
+	case "low", "medium", "high", "xhigh":
+		return effort
+	default:
+		return "high"
+	}
+}
+
+func isAllowedServiceTier(tier string) bool {
+	switch tier {
+	case "auto", "default", "flex", "priority", "scale", "fast":
+		return true
+	default:
+		return false
+	}
+}
+
+func upstreamServiceTier(tier string) string {
+	if tier == "fast" {
+		return "priority"
+	}
+	return tier
+}
+
 // clampReasoningEffort 将 reasoning.effort 钳位到上游支持的值（low/medium/high/xhigh）
 // 不支持的值映射到最接近的合法值
 func clampReasoningEffort(body []byte) []byte {
 	effort := gjson.GetBytes(body, "reasoning.effort").String()
-	if effort == "" {
+	normalized := normalizeReasoningEffort(effort)
+	if normalized == "" || normalized == effort {
 		return body
 	}
-	switch strings.ToLower(effort) {
-	case "low", "medium", "high", "xhigh":
-		return body // 合法值，不修改
-	default:
-		// very_high 等超出范围的值 → 钳位到 high
-		body, _ = sjson.SetBytes(body, "reasoning.effort", "high")
-		return body
-	}
+	body, _ = sjson.SetBytes(body, "reasoning.effort", normalized)
+	return body
 }
 
 func normalizeServiceTierField(body []byte) []byte {
