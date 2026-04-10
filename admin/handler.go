@@ -1924,6 +1924,9 @@ type settingsResponse struct {
 	PlusPortAccessFree     bool    `json:"plus_port_access_free"`
 	SchedulerPreferredPlan string  `json:"scheduler_preferred_plan"`
 	SchedulerPlanBonus     int     `json:"scheduler_plan_bonus"`
+	QuotaRatePlus          float64 `json:"quota_rate_plus"`
+	QuotaRatePro           float64 `json:"quota_rate_pro"`
+	QuotaRateTeam          float64 `json:"quota_rate_team"`
 	MaxRetries             int     `json:"max_retries"`
 	AllowRemoteMigration   bool    `json:"allow_remote_migration"`
 	PublicInitialCreditUSD float64 `json:"public_initial_credit_usd"`
@@ -1956,6 +1959,9 @@ type updateSettingsReq struct {
 	PlusPortAccessFree     *bool    `json:"plus_port_access_free"`
 	SchedulerPreferredPlan *string  `json:"scheduler_preferred_plan"`
 	SchedulerPlanBonus     *int     `json:"scheduler_plan_bonus"`
+	QuotaRatePlus          *float64 `json:"quota_rate_plus"`
+	QuotaRatePro           *float64 `json:"quota_rate_pro"`
+	QuotaRateTeam          *float64 `json:"quota_rate_team"`
 	MaxRetries             *int     `json:"max_retries"`
 	AllowRemoteMigration   *bool    `json:"allow_remote_migration"`
 	PublicInitialCreditUSD *float64 `json:"public_initial_credit_usd"`
@@ -1977,6 +1983,20 @@ func normalizeSchedulerPreferredPlan(raw string) (string, bool) {
 	}
 }
 
+func defaultQuotaRates() (plus float64, pro float64, team float64) {
+	return 10, 100, 10
+}
+
+func normalizeQuotaRate(value float64, fallback float64) (float64, bool) {
+	if value <= 0 {
+		return fallback, false
+	}
+	if value > 100000 {
+		return fallback, false
+	}
+	return value, true
+}
+
 // GetSettings 获取当前系统设置
 func (h *Handler) GetSettings(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
@@ -1986,6 +2006,18 @@ func (h *Handler) GetSettings(c *gin.Context) {
 	adminSecret := ""
 	if dbSettings != nil && adminAuthSource != "env" {
 		adminSecret = dbSettings.AdminSecret
+	}
+	quotaRatePlus, quotaRatePro, quotaRateTeam := defaultQuotaRates()
+	if dbSettings != nil {
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePlus, quotaRatePlus); ok {
+			quotaRatePlus = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro, quotaRatePro); ok {
+			quotaRatePro = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRateTeam, quotaRateTeam); ok {
+			quotaRateTeam = normalized
+		}
 	}
 	c.JSON(http.StatusOK, settingsResponse{
 		MaxConcurrency:         h.store.GetMaxConcurrency(),
@@ -2009,6 +2041,9 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		PlusPortAccessFree:     h.store.GetPlusPortAccessFree(),
 		SchedulerPreferredPlan: h.store.GetPreferredPlanType(),
 		SchedulerPlanBonus:     h.store.GetPreferredPlanBonus(),
+		QuotaRatePlus:          quotaRatePlus,
+		QuotaRatePro:           quotaRatePro,
+		QuotaRateTeam:          quotaRateTeam,
 		MaxRetries:             h.store.GetMaxRetries(),
 		AllowRemoteMigration:   h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
 		PublicInitialCreditUSD: h.store.GetPublicInitialCreditUSD(),
@@ -2029,8 +2064,18 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 
 	currentAdminSecret := ""
+	quotaRatePlus, quotaRatePro, quotaRateTeam := defaultQuotaRates()
 	if dbSettings, err := h.db.GetSystemSettings(c.Request.Context()); err == nil && dbSettings != nil {
 		currentAdminSecret = dbSettings.AdminSecret
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePlus, quotaRatePlus); ok {
+			quotaRatePlus = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro, quotaRatePro); ok {
+			quotaRatePro = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRateTeam, quotaRateTeam); ok {
+			quotaRateTeam = normalized
+		}
 	}
 	if req.AdminSecret != nil {
 		if h.adminSecretEnv == "" {
@@ -2201,6 +2246,31 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		log.Printf("设置已更新: scheduler_preferred_plan = %s, scheduler_plan_bonus = %d", h.store.GetPreferredPlanType(), h.store.GetPreferredPlanBonus())
 	}
 
+	if req.QuotaRatePlus != nil {
+		normalized, ok := normalizeQuotaRate(*req.QuotaRatePlus, quotaRatePlus)
+		if !ok {
+			writeError(c, http.StatusBadRequest, "quota_rate_plus 必须在 (0, 100000] 范围内")
+			return
+		}
+		quotaRatePlus = normalized
+	}
+	if req.QuotaRatePro != nil {
+		normalized, ok := normalizeQuotaRate(*req.QuotaRatePro, quotaRatePro)
+		if !ok {
+			writeError(c, http.StatusBadRequest, "quota_rate_pro 必须在 (0, 100000] 范围内")
+			return
+		}
+		quotaRatePro = normalized
+	}
+	if req.QuotaRateTeam != nil {
+		normalized, ok := normalizeQuotaRate(*req.QuotaRateTeam, quotaRateTeam)
+		if !ok {
+			writeError(c, http.StatusBadRequest, "quota_rate_team 必须在 (0, 100000] 范围内")
+			return
+		}
+		quotaRateTeam = normalized
+	}
+
 	if req.MaxRetries != nil {
 		v := *req.MaxRetries
 		if v < 0 {
@@ -2269,6 +2339,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		PlusPortAccessFree:     h.store.GetPlusPortAccessFree(),
 		SchedulerPreferredPlan: h.store.GetPreferredPlanType(),
 		SchedulerPlanBonus:     h.store.GetPreferredPlanBonus(),
+		QuotaRatePlus:          quotaRatePlus,
+		QuotaRatePro:           quotaRatePro,
+		QuotaRateTeam:          quotaRateTeam,
 		MaxRetries:             h.store.GetMaxRetries(),
 		AllowRemoteMigration:   h.store.GetAllowRemoteMigration() && hasAdminSecret,
 		PublicInitialCreditUSD: h.store.GetPublicInitialCreditUSD(),
@@ -2313,6 +2386,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		PlusPortAccessFree:     h.store.GetPlusPortAccessFree(),
 		SchedulerPreferredPlan: h.store.GetPreferredPlanType(),
 		SchedulerPlanBonus:     h.store.GetPreferredPlanBonus(),
+		QuotaRatePlus:          quotaRatePlus,
+		QuotaRatePro:           quotaRatePro,
+		QuotaRateTeam:          quotaRateTeam,
 		MaxRetries:             h.store.GetMaxRetries(),
 		AllowRemoteMigration:   h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
 		PublicInitialCreditUSD: h.store.GetPublicInitialCreditUSD(),

@@ -84,6 +84,9 @@ export default function Settings() {
     plus_port_access_free: true,
     scheduler_preferred_plan: '',
     scheduler_plan_bonus: 0,
+    quota_rate_plus: 10,
+    quota_rate_pro: 100,
+    quota_rate_team: 10,
     max_retries: 2,
     allow_remote_migration: false,
     public_initial_credit_usd: 0.1,
@@ -117,6 +120,9 @@ export default function Settings() {
       plus_port_access_free: settings.plus_port_access_free ?? true,
       scheduler_preferred_plan: settings.scheduler_preferred_plan ?? '',
       scheduler_plan_bonus: settings.scheduler_plan_bonus ?? 0,
+      quota_rate_plus: settings.quota_rate_plus ?? 10,
+      quota_rate_pro: settings.quota_rate_pro ?? 100,
+      quota_rate_team: settings.quota_rate_team ?? 10,
     })
     setLoadedAdminSecret(settings.admin_secret ?? '')
     setModelList(modelsResp.models ?? [])
@@ -287,6 +293,9 @@ export default function Settings() {
         plus_port_access_free: updated.plus_port_access_free ?? true,
         scheduler_preferred_plan: updated.scheduler_preferred_plan ?? '',
         scheduler_plan_bonus: updated.scheduler_plan_bonus ?? 0,
+        quota_rate_plus: updated.quota_rate_plus ?? 10,
+        quota_rate_pro: updated.quota_rate_pro ?? 100,
+        quota_rate_team: updated.quota_rate_team ?? 10,
       })
       setLoadedAdminSecret(updated.admin_secret ?? '')
       if (updated.admin_auth_source !== 'env') {
@@ -683,6 +692,45 @@ export default function Settings() {
                   }
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.publicFullCreditDesc')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.quotaRatePlus')}</label>
+                <Input
+                  type="number"
+                  min={0.0001}
+                  step="0.0001"
+                  value={settingsForm.quota_rate_plus}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setSettingsForm((f) => ({ ...f, quota_rate_plus: Number.parseFloat(e.target.value) || 0 }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.quotaRatePlusDesc')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.quotaRatePro')}</label>
+                <Input
+                  type="number"
+                  min={0.0001}
+                  step="0.0001"
+                  value={settingsForm.quota_rate_pro}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setSettingsForm((f) => ({ ...f, quota_rate_pro: Number.parseFloat(e.target.value) || 0 }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.quotaRateProDesc')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.quotaRateTeam')}</label>
+                <Input
+                  type="number"
+                  min={0.0001}
+                  step="0.0001"
+                  value={settingsForm.quota_rate_team}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setSettingsForm((f) => ({ ...f, quota_rate_team: Number.parseFloat(e.target.value) || 0 }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.quotaRateTeamDesc')}</p>
               </div>
               <div>
                 <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.testModelLabel')}</label>

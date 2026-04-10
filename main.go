@@ -75,6 +75,9 @@ func main() {
 			PlusPortAccessFree:     true,
 			PublicInitialCreditUSD: 0.1,
 			PublicFullCreditUSD:    2,
+			QuotaRatePlus:          10,
+			QuotaRatePro:           100,
+			QuotaRateTeam:          10,
 		}
 		_ = db.UpdateSystemSettings(context.Background(), settings)
 	} else if err != nil {
@@ -90,6 +93,9 @@ func main() {
 			PlusPortAccessFree:     true,
 			PublicInitialCreditUSD: 0.1,
 			PublicFullCreditUSD:    2,
+			QuotaRatePlus:          10,
+			QuotaRatePro:           100,
+			QuotaRateTeam:          10,
 		}
 	} else {
 		log.Printf("已加载持久化业务设置: ProxyURL=%s, MaxConcurrency=%d, GlobalRPM=%d, PgMaxConns=%d, RedisPoolSize=%d",

@@ -206,6 +206,9 @@ export interface SystemSettings {
   plus_port_access_free: boolean
   scheduler_preferred_plan: string
   scheduler_plan_bonus: number
+  quota_rate_plus: number
+  quota_rate_pro: number
+  quota_rate_team: number
   max_retries: number
   allow_remote_migration: boolean
   public_initial_credit_usd: number

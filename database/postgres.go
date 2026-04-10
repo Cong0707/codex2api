@@ -314,7 +314,10 @@ func (db *DB) migrate(ctx context.Context) error {
 		plus_port_enabled BOOLEAN DEFAULT FALSE,
 		plus_port_access_free BOOLEAN DEFAULT TRUE,
 		scheduler_preferred_plan VARCHAR(30) DEFAULT '',
-		scheduler_plan_bonus INT DEFAULT 0
+		scheduler_plan_bonus INT DEFAULT 0,
+		quota_rate_plus NUMERIC(12,4) DEFAULT 10,
+		quota_rate_pro NUMERIC(12,4) DEFAULT 100,
+		quota_rate_team NUMERIC(12,4) DEFAULT 10
 	);
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
@@ -335,6 +338,9 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS plus_port_access_free BOOLEAN DEFAULT TRUE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS scheduler_preferred_plan VARCHAR(30) DEFAULT '';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS scheduler_plan_bonus INT DEFAULT 0;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_plus NUMERIC(12,4) DEFAULT 10;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_pro NUMERIC(12,4) DEFAULT 100;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_team NUMERIC(12,4) DEFAULT 10;
 	UPDATE system_settings
 	SET auto_clean_full_usage_mode = CASE
 		WHEN COALESCE(auto_clean_full_usage, false) THEN 'delete'
@@ -483,6 +489,9 @@ type SystemSettings struct {
 	AllowRemoteMigration   bool
 	PublicInitialCreditUSD float64
 	PublicFullCreditUSD    float64
+	QuotaRatePlus          float64
+	QuotaRatePro           float64
+	QuotaRateTeam          float64
 }
 
 func normalizeFullUsageMode(mode string) string {
@@ -514,7 +523,10 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(auto_clean_error, false),
 		       COALESCE(auto_clean_expired, false),
 		       COALESCE(public_initial_credit_usd, 0.1),
-		       COALESCE(public_full_credit_usd, 2)
+		       COALESCE(public_full_credit_usd, 2),
+		       COALESCE(quota_rate_plus, 10),
+		       COALESCE(quota_rate_pro, 100),
+		       COALESCE(quota_rate_team, 10)
 		FROM system_settings WHERE id = 1
 	`).Scan(
 		&s.MaxConcurrency, &s.GlobalRPM, &s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize,
@@ -523,6 +535,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.SchedulerPreferredPlan, &s.SchedulerPlanBonus,
 		&s.MaxRetries, &s.AllowRemoteMigration,
 		&s.AutoCleanError, &s.AutoCleanExpired, &s.PublicInitialCreditUSD, &s.PublicFullCreditUSD,
+		&s.QuotaRatePlus, &s.QuotaRatePro, &s.QuotaRateTeam,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -547,10 +560,12 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		INSERT INTO system_settings (
 			id, max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
 			auto_clean_unauthorized, auto_clean_rate_limited, admin_secret, auto_clean_full_usage, auto_clean_full_usage_mode, proxy_pool_enabled,
-			fast_scheduler_enabled, plus_port_enabled, plus_port_access_free, scheduler_preferred_plan, scheduler_plan_bonus, max_retries, allow_remote_migration, auto_clean_error, auto_clean_expired,
+			fast_scheduler_enabled, plus_port_enabled, plus_port_access_free, scheduler_preferred_plan, scheduler_plan_bonus,
+			quota_rate_plus, quota_rate_pro, quota_rate_team,
+			max_retries, allow_remote_migration, auto_clean_error, auto_clean_expired,
 			public_initial_credit_usd, public_full_credit_usd
 		)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 		ON CONFLICT (id) DO UPDATE SET
 			max_concurrency         = EXCLUDED.max_concurrency,
 			global_rpm              = EXCLUDED.global_rpm,
@@ -570,6 +585,9 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 			plus_port_access_free   = EXCLUDED.plus_port_access_free,
 			scheduler_preferred_plan = EXCLUDED.scheduler_preferred_plan,
 			scheduler_plan_bonus    = EXCLUDED.scheduler_plan_bonus,
+			quota_rate_plus         = EXCLUDED.quota_rate_plus,
+			quota_rate_pro          = EXCLUDED.quota_rate_pro,
+			quota_rate_team         = EXCLUDED.quota_rate_team,
 			max_retries             = EXCLUDED.max_retries,
 			allow_remote_migration  = EXCLUDED.allow_remote_migration,
 			auto_clean_error        = EXCLUDED.auto_clean_error,
@@ -578,8 +596,9 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 			public_full_credit_usd = EXCLUDED.public_full_credit_usd
 	`, s.MaxConcurrency, s.GlobalRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 		s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, fullUsageEnabled, fullUsageMode, s.ProxyPoolEnabled,
-		s.FastSchedulerEnabled, s.PlusPortEnabled, s.PlusPortAccessFree, s.SchedulerPreferredPlan, s.SchedulerPlanBonus, s.MaxRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired,
-		s.PublicInitialCreditUSD, s.PublicFullCreditUSD)
+		s.FastSchedulerEnabled, s.PlusPortEnabled, s.PlusPortAccessFree, s.SchedulerPreferredPlan, s.SchedulerPlanBonus,
+		s.QuotaRatePlus, s.QuotaRatePro, s.QuotaRateTeam,
+		s.MaxRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired, s.PublicInitialCreditUSD, s.PublicFullCreditUSD)
 	return err
 }
 
