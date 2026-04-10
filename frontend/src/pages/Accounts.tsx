@@ -24,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Plus, RefreshCw, Trash2, Zap, FlaskConical, Ban, Timer, AlertTriangle, Upload, Download, ArrowDownToLine, KeyRound, ExternalLink, FileText, FileJson, BarChart3, Search, Fingerprint } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, Zap, FlaskConical, Ban, Timer, AlertTriangle, Upload, Download, ArrowDownToLine, KeyRound, ExternalLink, FileText, FileJson, BarChart3, Search, Fingerprint, ClipboardCopy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import AccountUsageModal from '../components/AccountUsageModal'
@@ -121,6 +121,7 @@ export default function Accounts() {
   } | null>(null)
   const [usageAccount, setUsageAccount] = useState<AccountRow | null>(null)
   const [importing, setImporting] = useState(false)
+  const [copyingAt, setCopyingAt] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [showImportPicker, setShowImportPicker] = useState(false)
   const [showExportPicker, setShowExportPicker] = useState(false)
@@ -515,6 +516,28 @@ export default function Accounts() {
     }
   }
 
+  const handleCopyAccessToken = async () => {
+    setCopyingAt(true)
+    try {
+      const params: { filter: 'healthy' | 'all'; ids?: number[] } = { filter: 'all' }
+      if (selected.size > 0) {
+        params.ids = Array.from(selected)
+      }
+      const data = await api.exportAccounts(params)
+      const tokens = data.map((e) => e.access_token).filter(Boolean)
+      if (tokens.length === 0) {
+        showToast(t('accounts.copyAccessTokenNoToken'), 'error')
+        return
+      }
+      await navigator.clipboard.writeText(tokens.join('\n'))
+      showToast(t('accounts.copyAccessTokenSuccess', { count: tokens.length }))
+    } catch (error) {
+      showToast(`${t('accounts.exportFailed')}: ${getErrorMessage(error)}`, 'error')
+    } finally {
+      setCopyingAt(false)
+    }
+  }
+
   const handleMigrate = async () => {
     setMigrating(true)
     setShowMigrate(false)
@@ -816,6 +839,10 @@ export default function Accounts() {
               <Button variant="outline" disabled={exporting} onClick={() => setShowExportPicker(true)}>
                 <Download className="size-3.5" />
                 {exporting ? t('accounts.exporting') : t('accounts.export')}
+              </Button>
+              <Button variant="outline" disabled={copyingAt} onClick={() => void handleCopyAccessToken()}>
+                <ClipboardCopy className="size-3.5" />
+                {copyingAt ? t('accounts.copyingAccessToken') : t('accounts.copyAccessToken')}
               </Button>
               <Button variant="outline" disabled={migrating} onClick={() => setShowMigrate(true)}>
                 <ArrowDownToLine className="size-3.5" />
