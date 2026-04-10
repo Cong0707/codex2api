@@ -1031,7 +1031,7 @@ export default function Accounts() {
         </div>
 
         <div className="mb-2 text-[12px] font-semibold text-muted-foreground">{t('accounts.quotaSectionFreeTitle')}</div>
-        <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-5">
           <CompactStat label={t('accounts.quotaAccountCount')} value={freeQuotaStats.accountCount} tone="neutral" />
           <CompactStat label={t('accounts.quotaTotal')} value={formatMetric(freeQuotaStats.quotaTotal)} tone="neutral" />
           <CompactStat label={t('accounts.quotaRemaining')} value={formatMetric(freeQuotaStats.quotaRemaining)} tone="success" />
@@ -1040,7 +1040,7 @@ export default function Accounts() {
         </div>
 
         <div className="mb-2 text-[12px] font-semibold text-muted-foreground">{t('accounts.quotaSectionPaidTitle')}</div>
-        <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-5">
           <CompactStat label={t('accounts.quotaAccountCount')} value={paidQuotaStats.accountCount} tone="neutral" />
           <CompactStat label={t('accounts.quotaTotal')} value={formatMetric(paidQuotaStats.quotaTotal)} tone="neutral" />
           <CompactStat label={t('accounts.quota5hRemaining')} value={formatMetric(paidQuotaStats.usage5hRemaining)} tone="success" />
@@ -1054,7 +1054,7 @@ export default function Accounts() {
         </div>
 
         <div className="mb-2 text-[12px] font-semibold text-muted-foreground">{t('accounts.quotaSectionTotalTitle')}</div>
-        <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-5">
           <CompactStat label={t('accounts.quotaAccountCount')} value={totalQuotaStats.accountCount} tone="neutral" />
           <CompactStat label={t('accounts.quotaTotal')} value={formatMetric(totalQuotaStats.quotaTotal)} tone="neutral" />
           <CompactStat label={t('accounts.quota5hRemaining')} value={formatMetric(totalQuotaStats.usage5hRemaining)} tone="success" />
