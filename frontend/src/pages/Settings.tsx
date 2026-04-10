@@ -69,6 +69,9 @@ export default function Settings() {
     global_rpm: 0,
     test_model: '',
     test_concurrency: 50,
+    background_refresh_interval_minutes: 2,
+    usage_probe_max_age_minutes: 10,
+    recovery_probe_interval_minutes: 30,
     pg_max_conns: 50,
     redis_pool_size: 30,
     auto_clean_unauthorized: false,
@@ -752,6 +755,39 @@ export default function Settings() {
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, test_concurrency: parseInt(e.target.value) || 1 }))}
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.testConcurrencyRange')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.backgroundRefreshInterval')}</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={settingsForm.background_refresh_interval_minutes}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, background_refresh_interval_minutes: parseInt(e.target.value) || 1 }))}
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.backgroundRefreshIntervalDesc')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.usageProbeMaxAge')}</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10080}
+                  value={settingsForm.usage_probe_max_age_minutes}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, usage_probe_max_age_minutes: parseInt(e.target.value) || 1 }))}
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.usageProbeMaxAgeDesc')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.recoveryProbeInterval')}</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10080}
+                  value={settingsForm.recovery_probe_interval_minutes}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, recovery_probe_interval_minutes: parseInt(e.target.value) || 1 }))}
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.recoveryProbeIntervalDesc')}</p>
               </div>
             </div>
             {showConnectionPool ? (

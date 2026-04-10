@@ -343,7 +343,13 @@ func (db *DB) migrate(ctx context.Context) error {
 		scheduler_plan_bonus INT DEFAULT 0,
 		quota_rate_plus NUMERIC(12,4) DEFAULT 10,
 		quota_rate_pro NUMERIC(12,4) DEFAULT 100,
-		quota_rate_team NUMERIC(12,4) DEFAULT 10
+		quota_rate_team NUMERIC(12,4) DEFAULT 10,
+		public_initial_credit_usd NUMERIC(12,4) DEFAULT 0.1,
+		public_full_credit_usd NUMERIC(12,4) DEFAULT 2,
+		model_mapping TEXT DEFAULT '{}',
+		background_refresh_interval_minutes INT DEFAULT 2,
+		usage_probe_max_age_minutes INT DEFAULT 10,
+		recovery_probe_interval_minutes INT DEFAULT 30
 	);
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
@@ -367,6 +373,10 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_plus NUMERIC(12,4) DEFAULT 10;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_pro NUMERIC(12,4) DEFAULT 100;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_team NUMERIC(12,4) DEFAULT 10;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS model_mapping TEXT DEFAULT '{}';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS background_refresh_interval_minutes INT DEFAULT 2;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_probe_max_age_minutes INT DEFAULT 10;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS recovery_probe_interval_minutes INT DEFAULT 30;
 	UPDATE system_settings
 	SET auto_clean_full_usage_mode = CASE
 		WHEN COALESCE(auto_clean_full_usage, false) THEN 'delete'
@@ -520,33 +530,37 @@ func (db *DB) InsertPublicAPIKeyWithMeta(ctx context.Context, name, key, source,
 
 // SystemSettings 运行时设置项
 type SystemSettings struct {
-	MaxConcurrency         int
-	GlobalRPM              int
-	TestModel              string
-	TestConcurrency        int
-	ProxyURL               string
-	PgMaxConns             int
-	RedisPoolSize          int
-	AutoCleanUnauthorized  bool
-	AutoCleanRateLimited   bool
-	AdminSecret            string
-	AutoCleanFullUsage     bool
-	AutoCleanFullUsageMode string
-	AutoCleanError         bool
-	AutoCleanExpired       bool
-	ProxyPoolEnabled       bool
-	FastSchedulerEnabled   bool
-	PlusPortEnabled        bool
-	PlusPortAccessFree     bool
-	SchedulerPreferredPlan string
-	SchedulerPlanBonus     int
-	MaxRetries             int
-	AllowRemoteMigration   bool
-	PublicInitialCreditUSD float64
-	PublicFullCreditUSD    float64
-	QuotaRatePlus          float64
-	QuotaRatePro           float64
-	QuotaRateTeam          float64
+	MaxConcurrency                   int
+	GlobalRPM                        int
+	TestModel                        string
+	TestConcurrency                  int
+	ProxyURL                         string
+	PgMaxConns                       int
+	RedisPoolSize                    int
+	AutoCleanUnauthorized            bool
+	AutoCleanRateLimited             bool
+	AdminSecret                      string
+	AutoCleanFullUsage               bool
+	AutoCleanFullUsageMode           string
+	AutoCleanError                   bool
+	AutoCleanExpired                 bool
+	ProxyPoolEnabled                 bool
+	FastSchedulerEnabled             bool
+	PlusPortEnabled                  bool
+	PlusPortAccessFree               bool
+	SchedulerPreferredPlan           string
+	SchedulerPlanBonus               int
+	MaxRetries                       int
+	AllowRemoteMigration             bool
+	PublicInitialCreditUSD           float64
+	PublicFullCreditUSD              float64
+	QuotaRatePlus                    float64
+	QuotaRatePro                     float64
+	QuotaRateTeam                    float64
+	ModelMapping                     string // JSON: {"anthropic_model": "codex_model", ...}
+	BackgroundRefreshIntervalMinutes int
+	UsageProbeMaxAgeMinutes          int
+	RecoveryProbeIntervalMinutes     int
 }
 
 func normalizeFullUsageMode(mode string) string {
@@ -581,7 +595,11 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(public_full_credit_usd, 2),
 		       COALESCE(quota_rate_plus, 10),
 		       COALESCE(quota_rate_pro, 100),
-		       COALESCE(quota_rate_team, 10)
+		       COALESCE(quota_rate_team, 10),
+		       COALESCE(model_mapping, '{}'),
+		       COALESCE(background_refresh_interval_minutes, 2),
+		       COALESCE(usage_probe_max_age_minutes, 10),
+		       COALESCE(recovery_probe_interval_minutes, 30)
 		FROM system_settings WHERE id = 1
 	`).Scan(
 		&s.MaxConcurrency, &s.GlobalRPM, &s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize,
@@ -591,6 +609,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.MaxRetries, &s.AllowRemoteMigration,
 		&s.AutoCleanError, &s.AutoCleanExpired, &s.PublicInitialCreditUSD, &s.PublicFullCreditUSD,
 		&s.QuotaRatePlus, &s.QuotaRatePro, &s.QuotaRateTeam,
+		&s.ModelMapping, &s.BackgroundRefreshIntervalMinutes, &s.UsageProbeMaxAgeMinutes, &s.RecoveryProbeIntervalMinutes,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -618,9 +637,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 			fast_scheduler_enabled, plus_port_enabled, plus_port_access_free, scheduler_preferred_plan, scheduler_plan_bonus,
 			quota_rate_plus, quota_rate_pro, quota_rate_team,
 			max_retries, allow_remote_migration, auto_clean_error, auto_clean_expired,
-			public_initial_credit_usd, public_full_credit_usd
+			public_initial_credit_usd, public_full_credit_usd, model_mapping,
+			background_refresh_interval_minutes, usage_probe_max_age_minutes, recovery_probe_interval_minutes
 		)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
 		ON CONFLICT (id) DO UPDATE SET
 			max_concurrency         = EXCLUDED.max_concurrency,
 			global_rpm              = EXCLUDED.global_rpm,
@@ -648,12 +668,17 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 			auto_clean_error        = EXCLUDED.auto_clean_error,
 			auto_clean_expired      = EXCLUDED.auto_clean_expired,
 			public_initial_credit_usd = EXCLUDED.public_initial_credit_usd,
-			public_full_credit_usd = EXCLUDED.public_full_credit_usd
+			public_full_credit_usd = EXCLUDED.public_full_credit_usd,
+			model_mapping           = EXCLUDED.model_mapping,
+			background_refresh_interval_minutes = EXCLUDED.background_refresh_interval_minutes,
+			usage_probe_max_age_minutes = EXCLUDED.usage_probe_max_age_minutes,
+			recovery_probe_interval_minutes = EXCLUDED.recovery_probe_interval_minutes
 	`, s.MaxConcurrency, s.GlobalRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 		s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, fullUsageEnabled, fullUsageMode, s.ProxyPoolEnabled,
 		s.FastSchedulerEnabled, s.PlusPortEnabled, s.PlusPortAccessFree, s.SchedulerPreferredPlan, s.SchedulerPlanBonus,
 		s.QuotaRatePlus, s.QuotaRatePro, s.QuotaRateTeam,
-		s.MaxRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired, s.PublicInitialCreditUSD, s.PublicFullCreditUSD)
+		s.MaxRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired, s.PublicInitialCreditUSD, s.PublicFullCreditUSD,
+		s.ModelMapping, s.BackgroundRefreshIntervalMinutes, s.UsageProbeMaxAgeMinutes, s.RecoveryProbeIntervalMinutes)
 	return err
 }
 

@@ -276,7 +276,7 @@ type accountResponse struct {
 	LastRateLimitedAt   string                     `json:"last_rate_limited_at,omitempty"`
 	LastTimeoutAt       string                     `json:"last_timeout_at,omitempty"`
 	LastServerErrorAt   string                     `json:"last_server_error_at,omitempty"`
-	Locked             bool                       `json:"locked"`
+	Locked              bool                       `json:"locked"`
 }
 
 type schedulerBreakdownResponse struct {
@@ -1946,69 +1946,77 @@ func (h *Handler) DeletePublicAPIKey(c *gin.Context) {
 // ==================== Settings ====================
 
 type settingsResponse struct {
-	MaxConcurrency         int     `json:"max_concurrency"`
-	GlobalRPM              int     `json:"global_rpm"`
-	TestModel              string  `json:"test_model"`
-	TestConcurrency        int     `json:"test_concurrency"`
-	ProxyURL               string  `json:"proxy_url"`
-	PgMaxConns             int     `json:"pg_max_conns"`
-	RedisPoolSize          int     `json:"redis_pool_size"`
-	AutoCleanUnauthorized  bool    `json:"auto_clean_unauthorized"`
-	AutoCleanRateLimited   bool    `json:"auto_clean_rate_limited"`
-	AdminSecret            string  `json:"admin_secret"`
-	AdminAuthSource        string  `json:"admin_auth_source"`
-	AutoCleanFullUsage     bool    `json:"auto_clean_full_usage"`
-	AutoCleanFullUsageMode string  `json:"auto_clean_full_usage_mode"`
-	AutoCleanError         bool    `json:"auto_clean_error"`
-	AutoCleanExpired       bool    `json:"auto_clean_expired"`
-	ProxyPoolEnabled       bool    `json:"proxy_pool_enabled"`
-	FastSchedulerEnabled   bool    `json:"fast_scheduler_enabled"`
-	PlusPortEnabled        bool    `json:"plus_port_enabled"`
-	PlusPortAccessFree     bool    `json:"plus_port_access_free"`
-	SchedulerPreferredPlan string  `json:"scheduler_preferred_plan"`
-	SchedulerPlanBonus     int     `json:"scheduler_plan_bonus"`
-	QuotaRatePlus          float64 `json:"quota_rate_plus"`
-	QuotaRatePro           float64 `json:"quota_rate_pro"`
-	QuotaRateTeam          float64 `json:"quota_rate_team"`
-	MaxRetries             int     `json:"max_retries"`
-	AllowRemoteMigration   bool    `json:"allow_remote_migration"`
-	PublicInitialCreditUSD float64 `json:"public_initial_credit_usd"`
-	PublicFullCreditUSD    float64 `json:"public_full_credit_usd"`
-	DatabaseDriver         string  `json:"database_driver"`
-	DatabaseLabel          string  `json:"database_label"`
-	CacheDriver            string  `json:"cache_driver"`
-	CacheLabel             string  `json:"cache_label"`
-	ExpiredCleaned         int     `json:"expired_cleaned,omitempty"`
+	MaxConcurrency                   int     `json:"max_concurrency"`
+	GlobalRPM                        int     `json:"global_rpm"`
+	TestModel                        string  `json:"test_model"`
+	TestConcurrency                  int     `json:"test_concurrency"`
+	BackgroundRefreshIntervalMinutes int     `json:"background_refresh_interval_minutes"`
+	UsageProbeMaxAgeMinutes          int     `json:"usage_probe_max_age_minutes"`
+	RecoveryProbeIntervalMinutes     int     `json:"recovery_probe_interval_minutes"`
+	ProxyURL                         string  `json:"proxy_url"`
+	PgMaxConns                       int     `json:"pg_max_conns"`
+	RedisPoolSize                    int     `json:"redis_pool_size"`
+	AutoCleanUnauthorized            bool    `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited             bool    `json:"auto_clean_rate_limited"`
+	AdminSecret                      string  `json:"admin_secret"`
+	AdminAuthSource                  string  `json:"admin_auth_source"`
+	AutoCleanFullUsage               bool    `json:"auto_clean_full_usage"`
+	AutoCleanFullUsageMode           string  `json:"auto_clean_full_usage_mode"`
+	AutoCleanError                   bool    `json:"auto_clean_error"`
+	AutoCleanExpired                 bool    `json:"auto_clean_expired"`
+	ProxyPoolEnabled                 bool    `json:"proxy_pool_enabled"`
+	FastSchedulerEnabled             bool    `json:"fast_scheduler_enabled"`
+	PlusPortEnabled                  bool    `json:"plus_port_enabled"`
+	PlusPortAccessFree               bool    `json:"plus_port_access_free"`
+	SchedulerPreferredPlan           string  `json:"scheduler_preferred_plan"`
+	SchedulerPlanBonus               int     `json:"scheduler_plan_bonus"`
+	QuotaRatePlus                    float64 `json:"quota_rate_plus"`
+	QuotaRatePro                     float64 `json:"quota_rate_pro"`
+	QuotaRateTeam                    float64 `json:"quota_rate_team"`
+	MaxRetries                       int     `json:"max_retries"`
+	AllowRemoteMigration             bool    `json:"allow_remote_migration"`
+	PublicInitialCreditUSD           float64 `json:"public_initial_credit_usd"`
+	PublicFullCreditUSD              float64 `json:"public_full_credit_usd"`
+	DatabaseDriver                   string  `json:"database_driver"`
+	DatabaseLabel                    string  `json:"database_label"`
+	CacheDriver                      string  `json:"cache_driver"`
+	CacheLabel                       string  `json:"cache_label"`
+	ExpiredCleaned                   int     `json:"expired_cleaned,omitempty"`
+	ModelMapping                     string  `json:"model_mapping"`
 }
 
 type updateSettingsReq struct {
-	MaxConcurrency         *int     `json:"max_concurrency"`
-	GlobalRPM              *int     `json:"global_rpm"`
-	TestModel              *string  `json:"test_model"`
-	TestConcurrency        *int     `json:"test_concurrency"`
-	ProxyURL               *string  `json:"proxy_url"`
-	PgMaxConns             *int     `json:"pg_max_conns"`
-	RedisPoolSize          *int     `json:"redis_pool_size"`
-	AutoCleanUnauthorized  *bool    `json:"auto_clean_unauthorized"`
-	AutoCleanRateLimited   *bool    `json:"auto_clean_rate_limited"`
-	AdminSecret            *string  `json:"admin_secret"`
-	AutoCleanFullUsage     *bool    `json:"auto_clean_full_usage"`
-	AutoCleanFullUsageMode *string  `json:"auto_clean_full_usage_mode"`
-	AutoCleanError         *bool    `json:"auto_clean_error"`
-	AutoCleanExpired       *bool    `json:"auto_clean_expired"`
-	ProxyPoolEnabled       *bool    `json:"proxy_pool_enabled"`
-	FastSchedulerEnabled   *bool    `json:"fast_scheduler_enabled"`
-	PlusPortEnabled        *bool    `json:"plus_port_enabled"`
-	PlusPortAccessFree     *bool    `json:"plus_port_access_free"`
-	SchedulerPreferredPlan *string  `json:"scheduler_preferred_plan"`
-	SchedulerPlanBonus     *int     `json:"scheduler_plan_bonus"`
-	QuotaRatePlus          *float64 `json:"quota_rate_plus"`
-	QuotaRatePro           *float64 `json:"quota_rate_pro"`
-	QuotaRateTeam          *float64 `json:"quota_rate_team"`
-	MaxRetries             *int     `json:"max_retries"`
-	AllowRemoteMigration   *bool    `json:"allow_remote_migration"`
-	PublicInitialCreditUSD *float64 `json:"public_initial_credit_usd"`
-	PublicFullCreditUSD    *float64 `json:"public_full_credit_usd"`
+	MaxConcurrency                   *int     `json:"max_concurrency"`
+	GlobalRPM                        *int     `json:"global_rpm"`
+	TestModel                        *string  `json:"test_model"`
+	TestConcurrency                  *int     `json:"test_concurrency"`
+	BackgroundRefreshIntervalMinutes *int     `json:"background_refresh_interval_minutes"`
+	UsageProbeMaxAgeMinutes          *int     `json:"usage_probe_max_age_minutes"`
+	RecoveryProbeIntervalMinutes     *int     `json:"recovery_probe_interval_minutes"`
+	ProxyURL                         *string  `json:"proxy_url"`
+	PgMaxConns                       *int     `json:"pg_max_conns"`
+	RedisPoolSize                    *int     `json:"redis_pool_size"`
+	AutoCleanUnauthorized            *bool    `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited             *bool    `json:"auto_clean_rate_limited"`
+	AdminSecret                      *string  `json:"admin_secret"`
+	AutoCleanFullUsage               *bool    `json:"auto_clean_full_usage"`
+	AutoCleanFullUsageMode           *string  `json:"auto_clean_full_usage_mode"`
+	AutoCleanError                   *bool    `json:"auto_clean_error"`
+	AutoCleanExpired                 *bool    `json:"auto_clean_expired"`
+	ProxyPoolEnabled                 *bool    `json:"proxy_pool_enabled"`
+	FastSchedulerEnabled             *bool    `json:"fast_scheduler_enabled"`
+	PlusPortEnabled                  *bool    `json:"plus_port_enabled"`
+	PlusPortAccessFree               *bool    `json:"plus_port_access_free"`
+	SchedulerPreferredPlan           *string  `json:"scheduler_preferred_plan"`
+	SchedulerPlanBonus               *int     `json:"scheduler_plan_bonus"`
+	QuotaRatePlus                    *float64 `json:"quota_rate_plus"`
+	QuotaRatePro                     *float64 `json:"quota_rate_pro"`
+	QuotaRateTeam                    *float64 `json:"quota_rate_team"`
+	MaxRetries                       *int     `json:"max_retries"`
+	AllowRemoteMigration             *bool    `json:"allow_remote_migration"`
+	PublicInitialCreditUSD           *float64 `json:"public_initial_credit_usd"`
+	PublicFullCreditUSD              *float64 `json:"public_full_credit_usd"`
+	ModelMapping                     *string  `json:"model_mapping"`
 }
 
 func normalizeSchedulerPreferredPlan(raw string) (string, bool) {
@@ -2063,38 +2071,42 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, settingsResponse{
-		MaxConcurrency:         h.store.GetMaxConcurrency(),
-		GlobalRPM:              h.rateLimiter.GetRPM(),
-		TestModel:              h.store.GetTestModel(),
-		TestConcurrency:        h.store.GetTestConcurrency(),
-		ProxyURL:               h.store.GetProxyURL(),
-		PgMaxConns:             h.pgMaxConns,
-		RedisPoolSize:          h.redisPoolSize,
-		AutoCleanUnauthorized:  h.store.GetAutoCleanUnauthorized(),
-		AutoCleanRateLimited:   h.store.GetAutoCleanRateLimited(),
-		AdminSecret:            adminSecret,
-		AdminAuthSource:        adminAuthSource,
-		AutoCleanFullUsage:     h.store.GetAutoCleanFullUsage(),
-		AutoCleanFullUsageMode: h.store.GetAutoCleanFullUsageMode(),
-		AutoCleanError:         h.store.GetAutoCleanError(),
-		AutoCleanExpired:       h.store.GetAutoCleanExpired(),
-		ProxyPoolEnabled:       h.store.GetProxyPoolEnabled(),
-		FastSchedulerEnabled:   h.store.FastSchedulerEnabled(),
-		PlusPortEnabled:        h.store.GetPlusPortEnabled(),
-		PlusPortAccessFree:     h.store.GetPlusPortAccessFree(),
-		SchedulerPreferredPlan: h.store.GetPreferredPlanType(),
-		SchedulerPlanBonus:     h.store.GetPreferredPlanBonus(),
-		QuotaRatePlus:          quotaRatePlus,
-		QuotaRatePro:           quotaRatePro,
-		QuotaRateTeam:          quotaRateTeam,
-		MaxRetries:             h.store.GetMaxRetries(),
-		AllowRemoteMigration:   h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
-		PublicInitialCreditUSD: h.store.GetPublicInitialCreditUSD(),
-		PublicFullCreditUSD:    h.store.GetPublicFullCreditUSD(),
-		DatabaseDriver:         h.databaseDriver,
-		DatabaseLabel:          h.databaseLabel,
-		CacheDriver:            h.cacheDriver,
-		CacheLabel:             h.cacheLabel,
+		MaxConcurrency:                   h.store.GetMaxConcurrency(),
+		GlobalRPM:                        h.rateLimiter.GetRPM(),
+		TestModel:                        h.store.GetTestModel(),
+		TestConcurrency:                  h.store.GetTestConcurrency(),
+		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
+		UsageProbeMaxAgeMinutes:          h.store.GetUsageProbeMaxAgeMinutes(),
+		RecoveryProbeIntervalMinutes:     h.store.GetRecoveryProbeIntervalMinutes(),
+		ProxyURL:                         h.store.GetProxyURL(),
+		PgMaxConns:                       h.pgMaxConns,
+		RedisPoolSize:                    h.redisPoolSize,
+		AutoCleanUnauthorized:            h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:             h.store.GetAutoCleanRateLimited(),
+		AdminSecret:                      adminSecret,
+		AdminAuthSource:                  adminAuthSource,
+		AutoCleanFullUsage:               h.store.GetAutoCleanFullUsage(),
+		AutoCleanFullUsageMode:           h.store.GetAutoCleanFullUsageMode(),
+		AutoCleanError:                   h.store.GetAutoCleanError(),
+		AutoCleanExpired:                 h.store.GetAutoCleanExpired(),
+		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
+		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
+		PlusPortEnabled:                  h.store.GetPlusPortEnabled(),
+		PlusPortAccessFree:               h.store.GetPlusPortAccessFree(),
+		SchedulerPreferredPlan:           h.store.GetPreferredPlanType(),
+		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
+		QuotaRatePlus:                    quotaRatePlus,
+		QuotaRatePro:                     quotaRatePro,
+		QuotaRateTeam:                    quotaRateTeam,
+		MaxRetries:                       h.store.GetMaxRetries(),
+		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
+		PublicInitialCreditUSD:           h.store.GetPublicInitialCreditUSD(),
+		PublicFullCreditUSD:              h.store.GetPublicFullCreditUSD(),
+		DatabaseDriver:                   h.databaseDriver,
+		DatabaseLabel:                    h.databaseLabel,
+		CacheDriver:                      h.cacheDriver,
+		CacheLabel:                       h.cacheLabel,
+		ModelMapping:                     h.store.GetModelMapping(),
 	})
 }
 
@@ -2166,6 +2178,42 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		}
 		h.store.SetTestConcurrency(v)
 		log.Printf("设置已更新: test_concurrency = %d", v)
+	}
+
+	if req.BackgroundRefreshIntervalMinutes != nil {
+		v := *req.BackgroundRefreshIntervalMinutes
+		if v < 1 {
+			v = 1
+		}
+		if v > 1440 {
+			v = 1440
+		}
+		h.store.SetBackgroundRefreshInterval(time.Duration(v) * time.Minute)
+		log.Printf("设置已更新: background_refresh_interval_minutes = %d", v)
+	}
+
+	if req.UsageProbeMaxAgeMinutes != nil {
+		v := *req.UsageProbeMaxAgeMinutes
+		if v < 1 {
+			v = 1
+		}
+		if v > 10080 {
+			v = 10080
+		}
+		h.store.SetUsageProbeMaxAge(time.Duration(v) * time.Minute)
+		log.Printf("设置已更新: usage_probe_max_age_minutes = %d", v)
+	}
+
+	if req.RecoveryProbeIntervalMinutes != nil {
+		v := *req.RecoveryProbeIntervalMinutes
+		if v < 1 {
+			v = 1
+		}
+		if v > 10080 {
+			v = 10080
+		}
+		h.store.SetRecoveryProbeInterval(time.Duration(v) * time.Minute)
+		log.Printf("设置已更新: recovery_probe_interval_minutes = %d", v)
 	}
 
 	if req.ProxyURL != nil {
@@ -2360,35 +2408,44 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		h.store.SetAllowRemoteMigration(false)
 	}
 
+	if req.ModelMapping != nil {
+		h.store.SetModelMapping(*req.ModelMapping)
+		log.Printf("设置已更新: model_mapping")
+	}
+
 	// 持久化保存到数据库
 	err := h.db.UpdateSystemSettings(c.Request.Context(), &database.SystemSettings{
-		MaxConcurrency:         h.store.GetMaxConcurrency(),
-		GlobalRPM:              h.rateLimiter.GetRPM(),
-		TestModel:              h.store.GetTestModel(),
-		TestConcurrency:        h.store.GetTestConcurrency(),
-		ProxyURL:               h.store.GetProxyURL(),
-		PgMaxConns:             h.pgMaxConns,
-		RedisPoolSize:          h.redisPoolSize,
-		AutoCleanUnauthorized:  h.store.GetAutoCleanUnauthorized(),
-		AutoCleanRateLimited:   h.store.GetAutoCleanRateLimited(),
-		AdminSecret:            currentAdminSecret,
-		AutoCleanFullUsage:     h.store.GetAutoCleanFullUsage(),
-		AutoCleanFullUsageMode: h.store.GetAutoCleanFullUsageMode(),
-		AutoCleanError:         h.store.GetAutoCleanError(),
-		AutoCleanExpired:       h.store.GetAutoCleanExpired(),
-		ProxyPoolEnabled:       h.store.GetProxyPoolEnabled(),
-		FastSchedulerEnabled:   h.store.FastSchedulerEnabled(),
-		PlusPortEnabled:        h.store.GetPlusPortEnabled(),
-		PlusPortAccessFree:     h.store.GetPlusPortAccessFree(),
-		SchedulerPreferredPlan: h.store.GetPreferredPlanType(),
-		SchedulerPlanBonus:     h.store.GetPreferredPlanBonus(),
-		QuotaRatePlus:          quotaRatePlus,
-		QuotaRatePro:           quotaRatePro,
-		QuotaRateTeam:          quotaRateTeam,
-		MaxRetries:             h.store.GetMaxRetries(),
-		AllowRemoteMigration:   h.store.GetAllowRemoteMigration() && hasAdminSecret,
-		PublicInitialCreditUSD: h.store.GetPublicInitialCreditUSD(),
-		PublicFullCreditUSD:    h.store.GetPublicFullCreditUSD(),
+		MaxConcurrency:                   h.store.GetMaxConcurrency(),
+		GlobalRPM:                        h.rateLimiter.GetRPM(),
+		TestModel:                        h.store.GetTestModel(),
+		TestConcurrency:                  h.store.GetTestConcurrency(),
+		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
+		UsageProbeMaxAgeMinutes:          h.store.GetUsageProbeMaxAgeMinutes(),
+		RecoveryProbeIntervalMinutes:     h.store.GetRecoveryProbeIntervalMinutes(),
+		ProxyURL:                         h.store.GetProxyURL(),
+		PgMaxConns:                       h.pgMaxConns,
+		RedisPoolSize:                    h.redisPoolSize,
+		AutoCleanUnauthorized:            h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:             h.store.GetAutoCleanRateLimited(),
+		AdminSecret:                      currentAdminSecret,
+		AutoCleanFullUsage:               h.store.GetAutoCleanFullUsage(),
+		AutoCleanFullUsageMode:           h.store.GetAutoCleanFullUsageMode(),
+		AutoCleanError:                   h.store.GetAutoCleanError(),
+		AutoCleanExpired:                 h.store.GetAutoCleanExpired(),
+		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
+		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
+		PlusPortEnabled:                  h.store.GetPlusPortEnabled(),
+		PlusPortAccessFree:               h.store.GetPlusPortAccessFree(),
+		SchedulerPreferredPlan:           h.store.GetPreferredPlanType(),
+		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
+		QuotaRatePlus:                    quotaRatePlus,
+		QuotaRatePro:                     quotaRatePro,
+		QuotaRateTeam:                    quotaRateTeam,
+		MaxRetries:                       h.store.GetMaxRetries(),
+		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && hasAdminSecret,
+		PublicInitialCreditUSD:           h.store.GetPublicInitialCreditUSD(),
+		PublicFullCreditUSD:              h.store.GetPublicFullCreditUSD(),
+		ModelMapping:                     h.store.GetModelMapping(),
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
@@ -2408,39 +2465,43 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, settingsResponse{
-		MaxConcurrency:         h.store.GetMaxConcurrency(),
-		GlobalRPM:              h.rateLimiter.GetRPM(),
-		TestModel:              h.store.GetTestModel(),
-		TestConcurrency:        h.store.GetTestConcurrency(),
-		ProxyURL:               h.store.GetProxyURL(),
-		PgMaxConns:             h.pgMaxConns,
-		RedisPoolSize:          h.redisPoolSize,
-		AutoCleanUnauthorized:  h.store.GetAutoCleanUnauthorized(),
-		AutoCleanRateLimited:   h.store.GetAutoCleanRateLimited(),
-		AdminSecret:            adminSecretForDisplay,
-		AdminAuthSource:        adminAuthSource,
-		AutoCleanFullUsage:     h.store.GetAutoCleanFullUsage(),
-		AutoCleanFullUsageMode: h.store.GetAutoCleanFullUsageMode(),
-		AutoCleanError:         h.store.GetAutoCleanError(),
-		AutoCleanExpired:       h.store.GetAutoCleanExpired(),
-		ProxyPoolEnabled:       h.store.GetProxyPoolEnabled(),
-		FastSchedulerEnabled:   h.store.FastSchedulerEnabled(),
-		PlusPortEnabled:        h.store.GetPlusPortEnabled(),
-		PlusPortAccessFree:     h.store.GetPlusPortAccessFree(),
-		SchedulerPreferredPlan: h.store.GetPreferredPlanType(),
-		SchedulerPlanBonus:     h.store.GetPreferredPlanBonus(),
-		QuotaRatePlus:          quotaRatePlus,
-		QuotaRatePro:           quotaRatePro,
-		QuotaRateTeam:          quotaRateTeam,
-		MaxRetries:             h.store.GetMaxRetries(),
-		AllowRemoteMigration:   h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
-		PublicInitialCreditUSD: h.store.GetPublicInitialCreditUSD(),
-		PublicFullCreditUSD:    h.store.GetPublicFullCreditUSD(),
-		DatabaseDriver:         h.databaseDriver,
-		DatabaseLabel:          h.databaseLabel,
-		CacheDriver:            h.cacheDriver,
-		CacheLabel:             h.cacheLabel,
-		ExpiredCleaned:         expiredCleaned,
+		MaxConcurrency:                   h.store.GetMaxConcurrency(),
+		GlobalRPM:                        h.rateLimiter.GetRPM(),
+		TestModel:                        h.store.GetTestModel(),
+		TestConcurrency:                  h.store.GetTestConcurrency(),
+		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
+		UsageProbeMaxAgeMinutes:          h.store.GetUsageProbeMaxAgeMinutes(),
+		RecoveryProbeIntervalMinutes:     h.store.GetRecoveryProbeIntervalMinutes(),
+		ProxyURL:                         h.store.GetProxyURL(),
+		PgMaxConns:                       h.pgMaxConns,
+		RedisPoolSize:                    h.redisPoolSize,
+		AutoCleanUnauthorized:            h.store.GetAutoCleanUnauthorized(),
+		AutoCleanRateLimited:             h.store.GetAutoCleanRateLimited(),
+		AdminSecret:                      adminSecretForDisplay,
+		AdminAuthSource:                  adminAuthSource,
+		AutoCleanFullUsage:               h.store.GetAutoCleanFullUsage(),
+		AutoCleanFullUsageMode:           h.store.GetAutoCleanFullUsageMode(),
+		AutoCleanError:                   h.store.GetAutoCleanError(),
+		AutoCleanExpired:                 h.store.GetAutoCleanExpired(),
+		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
+		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
+		PlusPortEnabled:                  h.store.GetPlusPortEnabled(),
+		PlusPortAccessFree:               h.store.GetPlusPortAccessFree(),
+		SchedulerPreferredPlan:           h.store.GetPreferredPlanType(),
+		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
+		QuotaRatePlus:                    quotaRatePlus,
+		QuotaRatePro:                     quotaRatePro,
+		QuotaRateTeam:                    quotaRateTeam,
+		MaxRetries:                       h.store.GetMaxRetries(),
+		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
+		PublicInitialCreditUSD:           h.store.GetPublicInitialCreditUSD(),
+		PublicFullCreditUSD:              h.store.GetPublicFullCreditUSD(),
+		DatabaseDriver:                   h.databaseDriver,
+		DatabaseLabel:                    h.databaseLabel,
+		CacheDriver:                      h.cacheDriver,
+		CacheLabel:                       h.cacheLabel,
+		ExpiredCleaned:                   expiredCleaned,
+		ModelMapping:                     h.store.GetModelMapping(),
 	})
 }
 

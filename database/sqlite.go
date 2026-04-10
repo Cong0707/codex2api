@@ -128,6 +128,9 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			redis_pool_size INTEGER DEFAULT 30,
 			auto_clean_unauthorized INTEGER DEFAULT 0,
 			auto_clean_rate_limited INTEGER DEFAULT 0,
+			background_refresh_interval_minutes INTEGER DEFAULT 2,
+			usage_probe_max_age_minutes INTEGER DEFAULT 10,
+			recovery_probe_interval_minutes INTEGER DEFAULT 30,
 			admin_secret TEXT DEFAULT '',
 			auto_clean_full_usage INTEGER DEFAULT 0,
 			auto_clean_full_usage_mode TEXT DEFAULT 'off',
@@ -145,7 +148,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			max_retries INTEGER DEFAULT 2,
 			allow_remote_migration INTEGER DEFAULT 0,
 			public_initial_credit_usd REAL DEFAULT 0.1,
-			public_full_credit_usd REAL DEFAULT 2
+			public_full_credit_usd REAL DEFAULT 2,
+			model_mapping TEXT DEFAULT '{}'
 		);`,
 		`CREATE TABLE IF NOT EXISTS proxies (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +209,9 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "redis_pool_size", "INTEGER DEFAULT 30"},
 		{"system_settings", "auto_clean_unauthorized", "INTEGER DEFAULT 0"},
 		{"system_settings", "auto_clean_rate_limited", "INTEGER DEFAULT 0"},
+		{"system_settings", "background_refresh_interval_minutes", "INTEGER DEFAULT 2"},
+		{"system_settings", "usage_probe_max_age_minutes", "INTEGER DEFAULT 10"},
+		{"system_settings", "recovery_probe_interval_minutes", "INTEGER DEFAULT 30"},
 		{"system_settings", "admin_secret", "TEXT DEFAULT ''"},
 		{"system_settings", "auto_clean_full_usage", "INTEGER DEFAULT 0"},
 		{"system_settings", "auto_clean_full_usage_mode", "TEXT DEFAULT 'off'"},
@@ -223,6 +230,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "allow_remote_migration", "INTEGER DEFAULT 0"},
 		{"system_settings", "public_initial_credit_usd", "REAL DEFAULT 0.1"},
 		{"system_settings", "public_full_credit_usd", "REAL DEFAULT 2"},
+		{"system_settings", "model_mapping", "TEXT DEFAULT '{}'"},
 		{"accounts", "locked", "INTEGER DEFAULT 0"},
 		{"proxies", "test_ip", "TEXT DEFAULT ''"},
 		{"proxies", "test_location", "TEXT DEFAULT ''"},
