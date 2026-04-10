@@ -1037,9 +1037,9 @@ export default function Accounts() {
           <CompactStat label={t('accounts.quotaUsed')} value={formatMetric(freeQuotaStats.quotaUsed)} tone="warning" />
           <CompactStat label={t('accounts.quotaRemaining')} value={formatMetric(freeQuotaStats.quotaRemaining)} tone="success" />
           <CompactStat label={t('accounts.quotaUsedPercent')} value={`${freeQuotaStats.quotaUsedPercent.toFixed(2)}%`} tone="warning" />
-          <CompactStat label={t('accounts.quotaRemainingPercent')} value={`${freeQuotaStats.quotaRemainingPercent.toFixed(2)}%`} tone="success" />
+          <CompactStat label={t('accounts.quotaRemainingPercent')} value={`${freeQuotaStats.quotaRemainingPercent.toFixed(2)}%`} tone="cyan" />
           <CompactStat label={t('accounts.quotaUsedAccounts')} value={formatMetric(freeQuotaStats.quotaUsedAccounts)} tone="warning" />
-          <CompactStat label={t('accounts.quotaRemainingAccounts')} value={formatMetric(freeQuotaStats.quotaRemainingAccounts)} tone="success" />
+          <CompactStat label={t('accounts.quotaRemainingAccounts')} value={formatMetric(freeQuotaStats.quotaRemainingAccounts)} tone="cyan" />
         </div>
 
         <div className="mb-2 text-[12px] font-semibold text-muted-foreground">{t('accounts.quotaSectionPaidTitle')}</div>
@@ -1049,15 +1049,15 @@ export default function Accounts() {
           <CompactStat label={t('accounts.quota5hUsed')} value={formatMetric(paidQuotaStats.usage5hUsed)} tone="warning" />
           <CompactStat label={t('accounts.quota5hRemaining')} value={formatMetric(paidQuotaStats.usage5hRemaining)} tone="success" />
           <CompactStat label={t('accounts.quota5hUsedPercent')} value={`${paidQuotaStats.usage5hUsedPercent.toFixed(2)}%`} tone="warning" />
-          <CompactStat label={t('accounts.quota5hRemainingPercent')} value={`${paidQuotaStats.usage5hRemainingPercent.toFixed(2)}%`} tone="success" />
+          <CompactStat label={t('accounts.quota5hRemainingPercent')} value={`${paidQuotaStats.usage5hRemainingPercent.toFixed(2)}%`} tone="cyan" />
           <CompactStat label={t('accounts.quota5hUsedAccounts')} value={formatMetric(paidQuotaStats.usage5hUsedAccounts)} tone="warning" />
-          <CompactStat label={t('accounts.quota5hRemainingAccounts')} value={formatMetric(paidQuotaStats.usage5hRemainingAccounts)} tone="success" />
+          <CompactStat label={t('accounts.quota5hRemainingAccounts')} value={formatMetric(paidQuotaStats.usage5hRemainingAccounts)} tone="cyan" />
           <CompactStat label={t('accounts.quota7dUsed')} value={formatMetric(paidQuotaStats.usage7dUsed)} tone="warning" />
           <CompactStat label={t('accounts.quota7dRemaining')} value={formatMetric(paidQuotaStats.usage7dRemaining)} tone="success" />
           <CompactStat label={t('accounts.quota7dUsedPercent')} value={`${paidQuotaStats.usage7dUsedPercent.toFixed(2)}%`} tone="warning" />
-          <CompactStat label={t('accounts.quota7dRemainingPercent')} value={`${paidQuotaStats.usage7dRemainingPercent.toFixed(2)}%`} tone="success" />
+          <CompactStat label={t('accounts.quota7dRemainingPercent')} value={`${paidQuotaStats.usage7dRemainingPercent.toFixed(2)}%`} tone="cyan" />
           <CompactStat label={t('accounts.quota7dUsedAccounts')} value={formatMetric(paidQuotaStats.usage7dUsedAccounts)} tone="warning" />
-          <CompactStat label={t('accounts.quota7dRemainingAccounts')} value={formatMetric(paidQuotaStats.usage7dRemainingAccounts)} tone="success" />
+          <CompactStat label={t('accounts.quota7dRemainingAccounts')} value={formatMetric(paidQuotaStats.usage7dRemainingAccounts)} tone="cyan" />
           <CompactStat label={t('accounts.quota5hWaitingCount')} value={paidQuotaStats.waiting5hCount} tone="warning" />
           <CompactStat label={t('accounts.quota7dWaitingCount')} value={paidQuotaStats.waiting7dCount} tone="warning" />
         </div>
@@ -1069,15 +1069,15 @@ export default function Accounts() {
           <CompactStat label={t('accounts.quota5hUsed')} value={formatMetric(totalQuotaStats.usage5hUsed)} tone="warning" />
           <CompactStat label={t('accounts.quota5hRemaining')} value={formatMetric(totalQuotaStats.usage5hRemaining)} tone="success" />
           <CompactStat label={t('accounts.quota5hUsedPercent')} value={`${totalQuotaStats.usage5hUsedPercent.toFixed(2)}%`} tone="warning" />
-          <CompactStat label={t('accounts.quota5hRemainingPercent')} value={`${totalQuotaStats.usage5hRemainingPercent.toFixed(2)}%`} tone="success" />
+          <CompactStat label={t('accounts.quota5hRemainingPercent')} value={`${totalQuotaStats.usage5hRemainingPercent.toFixed(2)}%`} tone="cyan" />
           <CompactStat label={t('accounts.quota5hUsedAccounts')} value={formatMetric(totalQuotaStats.usage5hUsedAccounts)} tone="warning" />
-          <CompactStat label={t('accounts.quota5hRemainingAccounts')} value={formatMetric(totalQuotaStats.usage5hRemainingAccounts)} tone="success" />
+          <CompactStat label={t('accounts.quota5hRemainingAccounts')} value={formatMetric(totalQuotaStats.usage5hRemainingAccounts)} tone="cyan" />
           <CompactStat label={t('accounts.quota7dUsed')} value={formatMetric(totalQuotaStats.usage7dUsed)} tone="warning" />
           <CompactStat label={t('accounts.quota7dRemaining')} value={formatMetric(totalQuotaStats.usage7dRemaining)} tone="success" />
           <CompactStat label={t('accounts.quota7dUsedPercent')} value={`${totalQuotaStats.usage7dUsedPercent.toFixed(2)}%`} tone="warning" />
-          <CompactStat label={t('accounts.quota7dRemainingPercent')} value={`${totalQuotaStats.usage7dRemainingPercent.toFixed(2)}%`} tone="success" />
+          <CompactStat label={t('accounts.quota7dRemainingPercent')} value={`${totalQuotaStats.usage7dRemainingPercent.toFixed(2)}%`} tone="cyan" />
           <CompactStat label={t('accounts.quota7dUsedAccounts')} value={formatMetric(totalQuotaStats.usage7dUsedAccounts)} tone="warning" />
-          <CompactStat label={t('accounts.quota7dRemainingAccounts')} value={formatMetric(totalQuotaStats.usage7dRemainingAccounts)} tone="success" />
+          <CompactStat label={t('accounts.quota7dRemainingAccounts')} value={formatMetric(totalQuotaStats.usage7dRemainingAccounts)} tone="cyan" />
           <CompactStat label={t('accounts.quota5hWaitingCount')} value={totalQuotaStats.waiting5hCount} tone="warning" />
           <CompactStat label={t('accounts.quota7dWaitingCount')} value={totalQuotaStats.waiting7dCount} tone="warning" />
         </div>
@@ -1847,7 +1847,7 @@ function CompactStat({
   label: string
   chipLabel?: string
   value: number | string
-  tone: 'neutral' | 'success' | 'warning' | 'danger'
+  tone: 'neutral' | 'success' | 'warning' | 'danger' | 'cyan'
 }) {
   const toneStyle = {
     neutral: {
@@ -1865,6 +1865,10 @@ function CompactStat({
     danger: {
       chip: 'bg-red-500/10 text-red-600 dark:bg-red-500/20 dark:text-red-300',
       dot: 'bg-red-500',
+    },
+    cyan: {
+      chip: 'bg-cyan-500/10 text-cyan-600 dark:bg-cyan-500/20 dark:text-cyan-300',
+      dot: 'bg-cyan-500',
     },
   }[tone]
 
