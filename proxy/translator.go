@@ -12,6 +12,47 @@ import (
 // maxTools 上游 Codex API 允许的最大工具数量
 const maxTools = 128
 
+// openAIMessage 表示 Chat Completions 中的一条消息
+type openAIMessage struct {
+	Role       string           `json:"role"`
+	Content    json.RawMessage  `json:"content"` // string 或 []contentPart
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+// openAIToolCall 表示 assistant 消息中的工具调用
+type openAIToolCall struct {
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// openAIToolParsed 表示解析后的工具定义
+type openAIToolParsed struct {
+	Type     string          `json:"type"`
+	Function *openAIToolFunc `json:"function,omitempty"`
+}
+
+// openAIToolFunc 表示工具的函数描述
+type openAIToolFunc struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+}
+
+// openAIContentPart 表示多部分内容中的一项
+type openAIContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
 // ==================== 请求翻译: OpenAI Chat Completions → Codex Responses ====================
 
 // TranslateRequest 将 OpenAI Chat Completions 请求转换为 Codex Responses 格式
@@ -248,6 +289,117 @@ func clampReasoningEffort(body []byte) []byte {
 	return body
 }
 
+// buildContentPartsSlice 将 content（string 或 []contentPart）转为 []any
+func buildContentPartsSlice(role string, raw json.RawMessage) []any {
+	parts := make([]any, 0)
+	if len(raw) == 0 {
+		return parts
+	}
+
+	contentType := "input_text"
+	if role == "assistant" {
+		contentType = "output_text"
+	}
+
+	first := firstNonSpace(raw)
+	switch first {
+	case '"':
+		var s string
+		if json.Unmarshal(raw, &s) != nil || s == "" {
+			return parts
+		}
+		return append(parts, map[string]any{"type": contentType, "text": s})
+	case '[':
+		var arr []openAIContentPart
+		if json.Unmarshal(raw, &arr) != nil {
+			return parts
+		}
+		for _, item := range arr {
+			switch item.Type {
+			case "text":
+				parts = append(parts, map[string]any{"type": contentType, "text": item.Text})
+			case "image_url":
+				if item.ImageURL != nil && item.ImageURL.URL != "" {
+					parts = append(parts, map[string]any{"type": "input_image", "image_url": item.ImageURL.URL})
+				}
+			}
+		}
+		return parts
+	default:
+		return parts
+	}
+}
+
+// rawMessageToString 安全地将 json.RawMessage 转为 Go string
+func rawMessageToString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return string(raw)
+}
+
+func firstNonSpace(raw json.RawMessage) byte {
+	for _, b := range raw {
+		if b != ' ' && b != '\n' && b != '\r' && b != '\t' {
+			return b
+		}
+	}
+	return 0
+}
+
+// convertToolsToCodexFormat 将 OpenAI 工具格式转为 Codex 格式（纯内存操作）
+// OpenAI: {type:"function", function:{name, description, parameters}}
+// Codex:  {type:"function", name, description, parameters}
+// 上游限制最多 128 个工具，超出部分静默截断
+func convertToolsToCodexFormat(rawTools []json.RawMessage) []any {
+	cap := len(rawTools)
+	if cap > maxTools {
+		cap = maxTools
+		rawTools = rawTools[:maxTools]
+	}
+	tools := make([]any, 0, cap)
+	for _, raw := range rawTools {
+		var parsed openAIToolParsed
+		if json.Unmarshal(raw, &parsed) != nil {
+			continue
+		}
+
+		if parsed.Type != "function" || parsed.Function == nil {
+			// 非 function 类型 → 透传原始 JSON
+			var passThrough any
+			_ = json.Unmarshal(raw, &passThrough)
+			tools = append(tools, passThrough)
+			continue
+		}
+
+		// function 类型 → 提升 function 内字段到顶层
+		item := map[string]any{
+			"type": "function",
+			"name": parsed.Function.Name,
+		}
+		if parsed.Function.Description != "" {
+			item["description"] = parsed.Function.Description
+		}
+		if len(parsed.Function.Parameters) > 0 {
+			var params map[string]any
+			if json.Unmarshal(parsed.Function.Parameters, &params) == nil {
+				sanitizeSchemaForUpstream(params)
+				item["parameters"] = params
+			}
+		}
+		if parsed.Function.Strict != nil {
+			item["strict"] = *parsed.Function.Strict
+		}
+		tools = append(tools, item)
+	}
+	return tools
+}
+
+// ==================== 向后兼容: 辅助函数 ====================
 func normalizeServiceTierField(body []byte) []byte {
 	tier := strings.TrimSpace(gjson.GetBytes(body, "service_tier").String())
 	if tier == "" {
@@ -577,6 +729,8 @@ func sanitizeSchemaForUpstream(schema map[string]interface{}) {
 	ensureArrayItems(schema)
 }
 
+// ensureArrayItems 递归为缺失 items 的数组 schema 补上空 schema，
+// 兼容上游对 array 必须声明 items 的校验。
 func ensureArrayItems(schema map[string]interface{}) {
 	if schemaDeclaresArray(schema) {
 		if _, ok := schema["items"]; !ok {
