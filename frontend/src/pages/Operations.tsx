@@ -42,6 +42,8 @@ export default function Operations() {
   }, [reloadSilently])
 
   const updatedLabel = overview?.updated_at ? formatTimeLabel(overview.updated_at) : '--:--:--'
+  const databaseMetric = overview ? getDatabaseMetric(overview, t) : null
+  const cacheMetric = overview ? getCacheMetric(overview, t) : null
 
   return (
     <StateShell
@@ -105,18 +107,18 @@ export default function Operations() {
                   />
                   <OpsMetricCard
                     label={overview.database_label || t('ops.postgres')}
-                    value={`${overview.postgres.usage_percent.toFixed(1)}%`}
-                    sub={t('ops.pgConn', { open: overview.postgres.open, max: overview.postgres.max_open || '∞' })}
+                    value={databaseMetric?.value ?? '--'}
+                    sub={databaseMetric?.sub ?? '--'}
                     icon={<Database className="size-5" />}
-                    tone={overview.postgres.healthy ? getPercentTone(overview.postgres.usage_percent, 75, 90) : 'danger'}
+                    tone={databaseMetric?.tone ?? 'normal'}
                     t={t}
                   />
                   <OpsMetricCard
                     label={overview.cache_label || t('ops.redis')}
-                    value={`${overview.redis.usage_percent.toFixed(1)}%`}
-                    sub={t('ops.redisConn', { open: overview.redis.total_conns, max: overview.redis.pool_size || '-' })}
+                    value={cacheMetric?.value ?? '--'}
+                    sub={cacheMetric?.sub ?? '--'}
                     icon={<Server className="size-5" />}
-                    tone={overview.redis.healthy ? getPercentTone(overview.redis.usage_percent, 70, 90) : 'danger'}
+                    tone={cacheMetric?.tone ?? 'normal'}
                     t={t}
                   />
                   <OpsMetricCard
@@ -258,6 +260,38 @@ function getPercentTone(value: number, warningThreshold: number, dangerThreshold
   if (value >= dangerThreshold) return 'danger'
   if (value >= warningThreshold) return 'warning'
   return 'normal'
+}
+
+function getDatabaseMetric(overview: OpsOverviewResponse, t: (key: string) => string): { value: string; sub: string; tone: MetricTone } {
+  if (overview.database_driver === 'sqlite') {
+    return {
+      value: overview.postgres.healthy ? t('ops.statusHealthy') : t('ops.statusAbnormal'),
+      sub: t('ops.sqliteMode'),
+      tone: overview.postgres.healthy ? 'info' : 'danger',
+    }
+  }
+
+  return {
+    value: `${overview.postgres.usage_percent.toFixed(1)}%`,
+    sub: t('ops.pgConn', { open: overview.postgres.open, max: overview.postgres.max_open || '∞' }),
+    tone: overview.postgres.healthy ? getPercentTone(overview.postgres.usage_percent, 75, 90) : 'danger',
+  }
+}
+
+function getCacheMetric(overview: OpsOverviewResponse, t: (key: string) => string): { value: string; sub: string; tone: MetricTone } {
+  if (overview.cache_driver === 'memory') {
+    return {
+      value: overview.redis.healthy ? t('ops.statusHealthy') : t('ops.statusAbnormal'),
+      sub: t('ops.memoryCacheMode'),
+      tone: overview.redis.healthy ? 'info' : 'danger',
+    }
+  }
+
+  return {
+    value: `${overview.redis.usage_percent.toFixed(1)}%`,
+    sub: t('ops.redisConn', { open: overview.redis.total_conns, max: overview.redis.pool_size || '-' }),
+    tone: overview.redis.healthy ? getPercentTone(overview.redis.usage_percent, 70, 90) : 'danger',
+  }
 }
 
 function formatBytes(bytes: number): string {
