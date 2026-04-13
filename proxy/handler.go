@@ -1062,6 +1062,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		} else {
 			// 非流式收集
 			var lastResponseData []byte
+			var collectedOutputText strings.Builder
 			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
 				eventType := gjson.GetBytes(data, "type").String()
 				if !firstFrameRecorded {
@@ -1077,7 +1078,9 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 				// 累计 delta 字符数
 				if eventType == "response.output_text.delta" {
-					deltaCharCount += len(gjson.GetBytes(data, "delta").String())
+					delta := gjson.GetBytes(data, "delta").String()
+					collectedOutputText.WriteString(delta)
+					deltaCharCount += len(delta)
 				}
 				if eventType == "response.completed" {
 					usage = extractUsage(data)
@@ -1102,6 +1105,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				responseObj := gjson.GetBytes(lastResponseData, "response")
 				if responseObj.Exists() {
 					responseJSON = []byte(responseObj.Raw)
+					responseJSON = ensureResponseOutputFromDelta(responseJSON, collectedOutputText.String())
 				}
 			}
 		}
@@ -2027,6 +2031,25 @@ func parseFloat(s string) float64 {
 	v := 0.0
 	fmt.Sscanf(s, "%f", &v)
 	return v
+}
+
+func ensureResponseOutputFromDelta(responseJSON []byte, collectedText string) []byte {
+	text := strings.TrimSpace(collectedText)
+	if len(responseJSON) == 0 || text == "" {
+		return responseJSON
+	}
+	output := gjson.GetBytes(responseJSON, "output")
+	if output.Exists() && output.IsArray() && len(output.Array()) > 0 {
+		return responseJSON
+	}
+
+	patched := responseJSON
+	patched, _ = sjson.SetBytes(patched, "output.0.type", "message")
+	patched, _ = sjson.SetBytes(patched, "output.0.role", "assistant")
+	patched, _ = sjson.SetBytes(patched, "output.0.status", "completed")
+	patched, _ = sjson.SetBytes(patched, "output.0.content.0.type", "output_text")
+	patched, _ = sjson.SetBytes(patched, "output.0.content.0.text", text)
+	return patched
 }
 
 // sendUpstreamError 发送上游错误响应给客户端

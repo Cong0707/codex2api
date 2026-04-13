@@ -9,6 +9,7 @@ import (
 
 	"github.com/codex2api/auth"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func TestParseUpstreamErrorBrief_FallsBackToDetail(t *testing.T) {
@@ -198,5 +199,26 @@ func TestSendFinalUpstreamError_Non429StatusPassthrough(t *testing.T) {
 	// 非 429 直接透传原状态码
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestEnsureResponseOutputFromDelta_PatchesEmptyOutput(t *testing.T) {
+	raw := []byte(`{"id":"resp_x","object":"response","output":[]}`)
+	patched := ensureResponseOutputFromDelta(raw, "测试通过")
+
+	output := gjson.GetBytes(patched, "output")
+	if !output.IsArray() || len(output.Array()) != 1 {
+		t.Fatalf("output = %s, want one item array", output.Raw)
+	}
+	if got := gjson.GetBytes(patched, "output.0.content.0.text").String(); got != "测试通过" {
+		t.Fatalf("output text = %q, want %q", got, "测试通过")
+	}
+}
+
+func TestEnsureResponseOutputFromDelta_KeepsExistingOutput(t *testing.T) {
+	raw := []byte(`{"id":"resp_x","object":"response","output":[{"type":"message","content":[{"type":"output_text","text":"原文"}]}]}`)
+	patched := ensureResponseOutputFromDelta(raw, "测试通过")
+	if string(patched) != string(raw) {
+		t.Fatalf("expected unchanged payload, got %s", string(patched))
 	}
 }
