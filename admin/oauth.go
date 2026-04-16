@@ -116,6 +116,8 @@ func (h *Handler) GenerateOAuthURL(c *gin.Context) {
 
 	redirectURI := strings.TrimSpace(req.RedirectURI)
 	if redirectURI == "" {
+		// OpenAI OAuth 仅注册了 localhost:1455 回调，始终使用固定默认值
+		// 避免因请求 Host 端口不同（如 localhost:3000）导致回调校验失败（#80）
 		redirectURI = oauthDefaultRedirectURI
 	}
 
