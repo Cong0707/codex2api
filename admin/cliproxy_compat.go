@@ -718,11 +718,7 @@ func (h *Handler) insertCompatAccount(ctx context.Context, name string, entry co
 				log.Printf("[cliproxy] 账号 %d 刷新失败: %v", accountID, err)
 				return
 			}
-			syncCtx, syncCancel := context.WithTimeout(context.Background(), 25*time.Second)
-			defer syncCancel()
-			if err := h.forceSyncPlanFromWhamUsageByID(syncCtx, accountID); err != nil {
-				log.Printf("[cliproxy] 账号 %d 套餐同步失败: %v", accountID, err)
-			}
+			h.triggerForcedPlanSync(accountID, "cliproxy_rt_upload")
 		}(id)
 	} else if entry.accessToken != "" {
 		h.triggerForcedPlanSync(id, "cliproxy_upload")
@@ -780,18 +776,18 @@ func (h *Handler) validatePublicUploadedAccount(ctx context.Context, accountID i
 			h.store.PersistUsageSnapshot(account, usagePct)
 		}
 		errBody, _ := io.ReadAll(resp.Body)
-		errCode := strings.TrimSpace(gjson.GetBytes(errBody, "error.code").String())
-		errMsg := strings.TrimSpace(gjson.GetBytes(errBody, "error.message").String())
-		account.SetLastFailureDetail(resp.StatusCode, errCode, errMsg)
-		switch resp.StatusCode {
-		case http.StatusUnauthorized:
+		errCode, errMsg := proxy.ParseUpstreamErrorBrief(errBody)
+		displayStatus := proxy.NormalizeUpstreamStatusCode(resp.StatusCode, errBody)
+		account.SetLastFailureDetail(displayStatus, errCode, errMsg)
+		switch {
+		case proxy.IsUnauthorizedLikeStatus(resp.StatusCode, errBody):
 			h.store.MarkCooldown(account, 24*time.Hour, "unauthorized")
-		case http.StatusTooManyRequests:
+		case resp.StatusCode == http.StatusTooManyRequests:
 			if !h.store.MarkFullUsageCooldownFromSnapshot(account) {
 				h.store.MarkCooldown(account, auth.RateLimitedProbeInterval, "rate_limited")
 			}
 		}
-		return fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(string(errBody), 500))
+		return fmt.Errorf("上游返回 %d: %s", displayStatus, truncate(string(errBody), 500))
 	}
 
 	if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, account); ok {

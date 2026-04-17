@@ -16,7 +16,41 @@ import (
 const (
 	autoPlanSyncIntervalDefault = 2 * time.Hour
 	autoPlanSyncIntervalFree    = 5 * time.Minute
+	forcedPlanSyncMaxAttempts   = 8
 )
+
+var forcedPlanSyncRetryDelays = []time.Duration{
+	0,
+	10 * time.Second,
+	20 * time.Second,
+	40 * time.Second,
+	1 * time.Minute,
+	2 * time.Minute,
+	3 * time.Minute,
+	5 * time.Minute,
+}
+
+func forcedPlanSyncDelayForAttempt(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 0
+	}
+	idx := attempt - 1
+	if idx >= 0 && idx < len(forcedPlanSyncRetryDelays) {
+		return forcedPlanSyncRetryDelays[idx]
+	}
+	return 5 * time.Minute
+}
+
+func shouldRetryForcedPlanSync(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "账号不在运行时池中") || strings.Contains(msg, "not in runtime pool") {
+		return false
+	}
+	return true
+}
 
 func (h *Handler) shouldAutoSyncPlan(account *auth.Account, now time.Time) bool {
 	if h == nil || account == nil {
@@ -140,10 +174,31 @@ func (h *Handler) triggerForcedPlanSync(accountID int64, source string) {
 		return
 	}
 	go func() {
-		syncCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		if err := h.forceSyncPlanFromWhamUsageByID(syncCtx, accountID); err != nil {
-			log.Printf("[账号 %d] %s 套餐同步失败: %v", accountID, source, err)
+		var lastErr error
+		for attempt := 1; attempt <= forcedPlanSyncMaxAttempts; attempt++ {
+			if delay := forcedPlanSyncDelayForAttempt(attempt); delay > 0 {
+				time.Sleep(delay)
+			}
+
+			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := h.forceSyncPlanFromWhamUsageByID(syncCtx, accountID)
+			cancel()
+			if err == nil {
+				if attempt > 1 {
+					log.Printf("[账号 %d] %s 套餐同步重试成功 (attempt %d)", accountID, source, attempt)
+				}
+				return
+			}
+
+			lastErr = err
+			if !shouldRetryForcedPlanSync(err) {
+				log.Printf("[账号 %d] %s 套餐同步终止: %v", accountID, source, err)
+				return
+			}
+			log.Printf("[账号 %d] %s 套餐同步失败 (attempt %d/%d): %v", accountID, source, attempt, forcedPlanSyncMaxAttempts, err)
+		}
+		if lastErr != nil {
+			log.Printf("[账号 %d] %s 套餐同步最终失败: %v", accountID, source, lastErr)
 		}
 	}()
 }
@@ -173,10 +228,12 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 		h.store.PersistUsageSnapshot(account, usagePct)
 	}
 
-	_, _ = io.Copy(io.Discard, resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+	displayStatus := proxy.NormalizeUpstreamStatusCode(resp.StatusCode, body)
+	errCode, errMsg := proxy.ParseUpstreamErrorBrief(body)
 
-	switch resp.StatusCode {
-	case http.StatusOK:
+	switch {
+	case resp.StatusCode == http.StatusOK:
 		h.store.ReportRequestSuccess(account, 0)
 		h.tryAutoSyncPlanFromWhamUsage(ctx, account)
 		if _, cooldownReason, active := account.GetCooldownSnapshot(); active && cooldownReason == "full_usage" {
@@ -188,12 +245,18 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 		}
 		h.store.ClearCooldown(account)
 		return nil
-	case http.StatusUnauthorized:
-		account.SetLastFailureDetail(http.StatusUnauthorized, "unauthorized", "Unauthorized")
-		h.store.ReportRequestFailure(account, "client", 0)
+	case proxy.IsUnauthorizedLikeStatus(resp.StatusCode, body):
+		if errCode == "" {
+			errCode = "unauthorized"
+		}
+		if errMsg == "" {
+			errMsg = "Unauthorized"
+		}
+		account.SetLastFailureDetail(displayStatus, errCode, errMsg)
+		h.store.ReportRequestFailure(account, "unauthorized", 0)
 		h.store.MarkCooldown(account, 24*time.Hour, "unauthorized")
 		return nil
-	case http.StatusTooManyRequests:
+	case resp.StatusCode == http.StatusTooManyRequests:
 		account.SetLastFailureDetail(http.StatusTooManyRequests, "rate_limited", "Rate limited")
 		h.store.ReportRequestFailure(account, "client", 0)
 		if _, cooldownReason, _ := account.GetCooldownSnapshot(); cooldownReason == "full_usage" {

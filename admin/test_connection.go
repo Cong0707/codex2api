@@ -86,18 +86,18 @@ func (h *Handler) TestConnection(c *gin.Context) {
 			h.store.PersistUsageSnapshot(account, usagePct)
 		}
 		errBody, _ := io.ReadAll(resp.Body)
-		errCode := strings.TrimSpace(gjson.GetBytes(errBody, "error.code").String())
-		errMsg := strings.TrimSpace(gjson.GetBytes(errBody, "error.message").String())
-		account.SetLastFailureDetail(resp.StatusCode, errCode, errMsg)
-		switch resp.StatusCode {
-		case http.StatusUnauthorized:
+		errCode, errMsg := proxy.ParseUpstreamErrorBrief(errBody)
+		displayStatus := proxy.NormalizeUpstreamStatusCode(resp.StatusCode, errBody)
+		account.SetLastFailureDetail(displayStatus, errCode, errMsg)
+		switch {
+		case proxy.IsUnauthorizedLikeStatus(resp.StatusCode, errBody):
 			h.store.MarkCooldown(account, 24*time.Hour, "unauthorized")
-		case http.StatusTooManyRequests:
+		case resp.StatusCode == http.StatusTooManyRequests:
 			if !h.store.MarkFullUsageCooldownFromSnapshot(account) {
 				h.store.MarkCooldown(account, auth.RateLimitedProbeInterval, "rate_limited")
 			}
 		}
-		sendTestEvent(c, testEvent{Type: "error", Error: fmt.Sprintf("上游返回 %d: %s", resp.StatusCode, truncate(string(errBody), 500))})
+		sendTestEvent(c, testEvent{Type: "error", Error: fmt.Sprintf("上游返回 %d: %s", displayStatus, truncate(string(errBody), 500))})
 		return
 	}
 
@@ -320,11 +320,11 @@ func (h *Handler) BatchTest(c *gin.Context) {
 			}
 			defer resp.Body.Close()
 			errBody, _ := io.ReadAll(resp.Body)
-			errCode := strings.TrimSpace(gjson.GetBytes(errBody, "error.code").String())
-			errMsg := strings.TrimSpace(gjson.GetBytes(errBody, "error.message").String())
+			errCode, errMsg := proxy.ParseUpstreamErrorBrief(errBody)
+			displayStatus := proxy.NormalizeUpstreamStatusCode(resp.StatusCode, errBody)
 
-			switch resp.StatusCode {
-			case http.StatusOK:
+			switch {
+			case resp.StatusCode == http.StatusOK:
 				if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, acc); ok {
 					h.store.PersistUsageSnapshot(acc, usagePct)
 				}
@@ -337,15 +337,15 @@ func (h *Handler) BatchTest(c *gin.Context) {
 					h.store.ClearCooldown(acc)
 				}
 				atomic.AddInt64(&successCount, 1)
-			case http.StatusUnauthorized:
-				acc.SetLastFailureDetail(resp.StatusCode, errCode, errMsg)
+			case proxy.IsUnauthorizedLikeStatus(resp.StatusCode, errBody):
+				acc.SetLastFailureDetail(displayStatus, errCode, errMsg)
 				if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, acc); ok {
 					h.store.PersistUsageSnapshot(acc, usagePct)
 				}
 				h.store.MarkCooldown(acc, 24*time.Hour, "unauthorized")
 				atomic.AddInt64(&bannedCount, 1)
-			case http.StatusTooManyRequests:
-				acc.SetLastFailureDetail(resp.StatusCode, errCode, errMsg)
+			case resp.StatusCode == http.StatusTooManyRequests:
+				acc.SetLastFailureDetail(displayStatus, errCode, errMsg)
 				if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, acc); ok {
 					h.store.PersistUsageSnapshot(acc, usagePct)
 				}

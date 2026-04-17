@@ -246,6 +246,7 @@
     "modelDistribution": "Model Distribution",
     "noUsageData": "No usage data yet",
     "searchPlaceholder": "Search email or name…",
+    "pageSizeLabel": "Per page",
     "usage5h": "5h",
     "usage7d": "7d",
     "resetIn": "Reset: {{time}}",

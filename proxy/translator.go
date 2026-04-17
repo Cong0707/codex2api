@@ -746,6 +746,32 @@ func ExtractToolCallsFromOutput(eventData []byte) []ToolCallResult {
 	return toolCalls
 }
 
+// ExtractOutputTextFromOutput 从 response.completed 事件的 output 数组中提取输出文本（message/output_text）。
+func ExtractOutputTextFromOutput(eventData []byte) string {
+	output := gjson.GetBytes(eventData, "response.output")
+	if !output.IsArray() {
+		return ""
+	}
+	var builder strings.Builder
+	output.ForEach(func(_, item gjson.Result) bool {
+		if item.Get("type").String() != "message" {
+			return true
+		}
+		content := item.Get("content")
+		if !content.IsArray() {
+			return true
+		}
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Get("type").String() == "output_text" {
+				builder.WriteString(part.Get("text").String())
+			}
+			return true
+		})
+		return true
+	})
+	return builder.String()
+}
+
 // escapeJSON 安全转义 JSON 字符串
 func escapeJSON(s string) string {
 	b, _ := sjson.SetBytes([]byte(`{"v":""}`), "v", s)

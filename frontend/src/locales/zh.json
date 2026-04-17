@@ -250,6 +250,7 @@
     "modelDistribution": "模型分布",
     "noUsageData": "暂无使用记录",
     "searchPlaceholder": "搜索邮箱或名称…",
+    "pageSizeLabel": "单页数量",
     "usage5h": "5h",
     "usage7d": "7d",
     "resetIn": "重置: {{time}}",

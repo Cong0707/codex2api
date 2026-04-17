@@ -142,15 +142,43 @@ function calcWeightedUsed(accounts: AccountRow[], rates: QuotaRateConfig, usageK
   }, 0)
 }
 
+// 5h 可用额度需扣除 7d 窗口影响：按账号维度取 max(5h_used, 7d_used)
+function calcWeightedUsed5hEffective(accounts: AccountRow[], rates: QuotaRateConfig): number {
+  return accounts.reduce((sum, account) => {
+    const weight = resolvePlanWeight(account.plan_type, rates)
+    const used5h = clampUsagePercent(account.usage_percent_5h)
+    const used7d = clampUsagePercent(account.usage_percent_7d)
+    return sum + weight * Math.max(used5h, used7d)
+  }, 0)
+}
+
+function isUsageFull(value?: number | null): boolean {
+  if (value === null || value === undefined) return false
+  if (!Number.isFinite(value)) return false
+  return value >= 100
+}
+
 function calcWaitCount(accounts: AccountRow[], waitType: '5h' | '7d'): number {
   return accounts.filter((account) => {
     if (!account.wait_mode) return false
     const waitReason = (account.wait_reason || '').toLowerCase()
     const status = (account.status || '').toLowerCase()
-    if (waitType === '5h') {
-      return waitReason === 'rate_limited' || status === 'rate_limited'
+    const isFullUsageWait = waitReason === 'full_usage' || status === 'full_usage'
+    const isRateLimitedWait = waitReason === 'rate_limited' || status === 'rate_limited'
+    const isFull5h = isUsageFull(account.usage_percent_5h)
+    const isFull7d = isUsageFull(account.usage_percent_7d)
+    if (waitType === '7d') {
+      // 7d 满时优先计入 7d 等待（即使当前 wait_reason 不是 full_usage）
+      return isFull7d
     }
-    return waitReason === 'full_usage' || status === 'full_usage'
+
+    // 5h 统计排除所有 7d 已满账号：5h 到时后也不会可用
+    if (isFull7d) return false
+    if (isRateLimitedWait) return true
+    if (isFullUsageWait) {
+      return isFull5h
+    }
+    return false
   }).length
 }
 
@@ -174,7 +202,7 @@ function calcFreeQuotaStats(accounts: AccountRow[], rates: QuotaRateConfig): Quo
 
 function calcWindowedQuotaStats(accounts: AccountRow[], rates: QuotaRateConfig): QuotaStatsWindowed {
   const quotaTotal = calcWeightedTotal(accounts, rates)
-  const usage5hUsed = calcWeightedUsed(accounts, rates, 'usage_percent_5h')
+  const usage5hUsed = calcWeightedUsed5hEffective(accounts, rates)
   const usage5hRemaining = Math.max(0, quotaTotal - usage5hUsed)
   const usage7dUsed = calcWeightedUsed(accounts, rates, 'usage_percent_7d')
   const usage7dRemaining = Math.max(0, quotaTotal - usage7dUsed)
@@ -211,17 +239,20 @@ function formatUSD(value?: number | null): string {
   return amount.toFixed(4).replace(/\.?0+$/, '')
 }
 
+const PAGE_SIZE_MIN = 20
+const PAGE_SIZE_MAX = 200
+const PAGE_SIZE_OPTIONS = Array.from({ length: ((PAGE_SIZE_MAX - PAGE_SIZE_MIN) / 10) + 1 }, (_, index) => PAGE_SIZE_MIN + index * 10)
+
 export default function Accounts() {
   const { t } = useTranslation()
   const [showAdd, setShowAdd] = useState(false)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_MIN)
   const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'rate_limited' | 'full_usage' | 'banned'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [planFilter, setPlanFilter] = useState<'all' | 'plus' | 'pro' | 'team' | 'free'>('all')
   const [sortKey, setSortKey] = useState<'requests' | 'usage' | 'importTime' | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-
-  const PAGE_SIZE = 20
   const [addForm, setAddForm] = useState<AddAccountRequest>({
     refresh_token: '',
     proxy_url: '',
@@ -349,11 +380,8 @@ export default function Accounts() {
   const freeQuotaStats = calcFreeQuotaStats(freeQuotaAccounts, quotaRates)
   const paidQuotaStats = calcWindowedQuotaStats(paidQuotaAccounts, quotaRates)
   const totalQuota = calcWeightedTotal(quotaSourceAccounts, quotaRates)
-  const freeUsedBaseForTotal = calcWeightedUsed(freeQuotaAccounts, quotaRates, 'usage_percent_7d')
-  const paidUsed5hForTotal = calcWeightedUsed(paidQuotaAccounts, quotaRates, 'usage_percent_5h')
-  const paidUsed7dForTotal = calcWeightedUsed(paidQuotaAccounts, quotaRates, 'usage_percent_7d')
-  const totalUsed5h = freeUsedBaseForTotal + paidUsed5hForTotal
-  const totalUsed7d = freeUsedBaseForTotal + paidUsed7dForTotal
+  const totalUsed5h = calcWeightedUsed5hEffective(quotaSourceAccounts, quotaRates)
+  const totalUsed7d = calcWeightedUsed(quotaSourceAccounts, quotaRates, 'usage_percent_7d')
   const totalRemaining5h = Math.max(0, totalQuota - totalUsed5h)
   const totalRemaining7d = Math.max(0, totalQuota - totalUsed7d)
   const totalQuotaStats: QuotaStatsWindowed = {
@@ -419,8 +447,8 @@ export default function Accounts() {
     return sortDir === 'asc' ? diff : -diff
   })
 
-  const totalPages = Math.max(1, Math.ceil(sortedAccounts.length / PAGE_SIZE))
-  const pagedAccounts = sortedAccounts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(sortedAccounts.length / pageSize))
+  const pagedAccounts = sortedAccounts.slice((page - 1) * pageSize, page * pageSize)
   const allPageSelected = pagedAccounts.length > 0 && pagedAccounts.every((a) => selected.has(a.id))
 
   const toggleSelect = (id: number) => {
@@ -1156,7 +1184,35 @@ export default function Accounts() {
               </button>
             ))}
           </div>
+          <div className="ml-auto flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-2 py-1">
+            <span className="text-[12px] text-muted-foreground">{t('accounts.pageSizeLabel')}</span>
+            <select
+              value={pageSize}
+              onChange={(event) => {
+                const next = Number(event.target.value)
+                if (!Number.isFinite(next)) return
+                const clamped = Math.min(PAGE_SIZE_MAX, Math.max(PAGE_SIZE_MIN, Math.floor(next)))
+                setPageSize(clamped)
+                setPage(1)
+              }}
+              className="h-7 min-w-[86px] rounded-md border border-input bg-background px-2 text-[12px] text-foreground outline-none focus:ring-2 focus:ring-ring"
+            >
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
+
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          totalItems={accounts.length}
+          pageSize={pageSize}
+        />
 
         {selected.size > 0 && (
           <div className="flex items-center justify-between gap-3 px-4 py-2.5 mb-4 rounded-2xl bg-primary/10 border border-primary/20 text-sm font-semibold text-primary">
@@ -1391,7 +1447,7 @@ export default function Accounts() {
                 totalPages={totalPages}
                 onPageChange={setPage}
                 totalItems={accounts.length}
-                pageSize={PAGE_SIZE}
+                pageSize={pageSize}
               />
             </StateShell>
           </CardContent>

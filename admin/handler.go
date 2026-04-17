@@ -573,12 +573,8 @@ func (h *Handler) AddAccount(c *gin.Context) {
 				log.Printf("新账号 %d 刷新失败: %v", accountID, err)
 			} else {
 				log.Printf("新账号 %d 刷新成功，已加入号池", accountID)
-				syncCtx, syncCancel := context.WithTimeout(context.Background(), 25*time.Second)
-				defer syncCancel()
-				if err := h.forceSyncPlanFromWhamUsageByID(syncCtx, accountID); err != nil {
-					log.Printf("新账号 %d 套餐同步失败: %v", accountID, err)
-				}
 			}
+			h.triggerForcedPlanSync(accountID, "manual_add")
 		}(id)
 	}
 
@@ -1017,12 +1013,8 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 					log.Printf("导入账号 %d 刷新失败: %v", accountID, err)
 				} else {
 					log.Printf("导入账号 %d 刷新成功", accountID)
-					syncCtx, syncCancel := context.WithTimeout(context.Background(), 25*time.Second)
-					defer syncCancel()
-					if err := h.forceSyncPlanFromWhamUsageByID(syncCtx, accountID); err != nil {
-						log.Printf("导入账号 %d 套餐同步失败: %v", accountID, err)
-					}
 				}
+				h.triggerForcedPlanSync(accountID, "import_rt")
 			}(id)
 		}(i, t)
 	}
@@ -1238,12 +1230,8 @@ func (h *Handler) importMixedAccountsCommon(c *gin.Context, items []importAccoun
 						log.Printf("导入账号 %d 刷新失败: %v", accountID, err)
 					} else {
 						log.Printf("导入账号 %d 刷新成功", accountID)
-						syncCtx, syncCancel := context.WithTimeout(context.Background(), 25*time.Second)
-						defer syncCancel()
-						if err := h.forceSyncPlanFromWhamUsageByID(syncCtx, accountID); err != nil {
-							log.Printf("导入账号 %d 套餐同步失败: %v", accountID, err)
-						}
 					}
+					h.triggerForcedPlanSync(accountID, "import_rt")
 				}(id)
 			} else if at != "" {
 				h.triggerForcedPlanSync(id, "import")
@@ -1506,6 +1494,7 @@ func (h *Handler) RefreshAccount(c *gin.Context) {
 	defer syncCancel()
 	if err := h.forceSyncPlanFromWhamUsageByID(syncCtx, id); err != nil {
 		log.Printf("账号 %d 刷新后套餐同步失败: %v", id, err)
+		h.triggerForcedPlanSync(id, "manual_refresh_fallback")
 	}
 
 	writeMessage(c, http.StatusOK, "账号刷新成功")
