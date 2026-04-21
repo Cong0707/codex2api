@@ -12,6 +12,7 @@ import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useToast } from '../hooks/useToast'
 import type { AccountRow, AddAccountRequest, AddATAccountRequest } from '../types'
 import { getErrorMessage } from '../utils/error'
+import { formatCompactEmail } from '../lib/utils'
 import { formatRelativeTime, formatBeijingTime } from '../utils/time'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -1274,7 +1275,7 @@ export default function Accounts() {
                         </TableCell>
                         <TableCell className="text-[14px] font-mono text-muted-foreground">{account.id}</TableCell>
                         <TableCell className="text-[14px] text-muted-foreground">
-                          {account.email || '-'}
+                          {formatCompactEmail(account.email)}
                           {account.at_only && (
                             <span className="ml-1.5 inline-flex items-center rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-950 dark:text-amber-400 dark:ring-amber-400/20">
                               AT
