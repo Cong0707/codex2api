@@ -74,9 +74,14 @@ Codex2API 采用三层配置架构：
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `CACHE_DRIVER` | 是 | redis | 固定值: redis |
-| `REDIS_ADDR` | 是 | - | Redis 地址，如 `redis:6379` |
-| `REDIS_PASSWORD` | 否 | - | Redis 密码 |
+| `REDIS_ADDR` | 是 | - | Redis 地址，支持 `redis:6379`、`redis://default:pass@host:6379/0`、`rediss://default:pass@host:6379/0` |
+| `REDIS_USERNAME` | 否 | - | Redis ACL 用户名；URL 中已包含用户名时可不填 |
+| `REDIS_PASSWORD` | 否 | - | Redis 密码；URL 中已包含密码时可不填 |
 | `REDIS_DB` | 否 | 0 | Redis 数据库编号 |
+| `REDIS_TLS` | 否 | false | 为 `host:port` 形式的 Redis 启用 TLS；`rediss://` 会自动启用 |
+| `REDIS_INSECURE_SKIP_VERIFY` | 否 | false | 跳过 TLS 证书校验，仅建议自签证书或排障时使用 |
+
+> Aiven、Upstash 等云 Redis 通常要求 TLS。优先使用平台提供的 `rediss://...` 连接串；如果只填写 `host:port`，请设置 `REDIS_TLS=true`，否则可能在启动时出现 `Redis 连接失败: EOF`。
 
 #### 内存缓存模式
 
@@ -164,8 +169,11 @@ DATABASE_SSLMODE=disable
 # 缓存配置 (Redis)
 CACHE_DRIVER=redis
 REDIS_ADDR=redis:6379
+REDIS_USERNAME=
 REDIS_PASSWORD=your-redis-password
 REDIS_DB=0
+REDIS_TLS=false
+REDIS_INSECURE_SKIP_VERIFY=false
 ```
 
 ### SQLite 轻量环境 (.env)
@@ -209,8 +217,10 @@ DATABASE_NAME=codex2api
 # 本地 Redis
 CACHE_DRIVER=redis
 REDIS_ADDR=localhost:6379
+REDIS_USERNAME=
 REDIS_PASSWORD=
 REDIS_DB=0
+REDIS_TLS=false
 
 TZ=Asia/Shanghai
 ```

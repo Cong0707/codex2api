@@ -171,6 +171,8 @@ cp .env.sqlite.example .env
 docker compose -f docker-compose.sqlite.local.yml up -d --build
 ```
 
+如果你的 Redis 来自 Aiven、Upstash 等云服务，通常需要 TLS，可直接使用平台提供的 `rediss://...` 连接串；如果仍使用 `host:port`，请额外设置 `REDIS_TLS=true`。
+
 如果你要使用镜像拉取模式，请改成你自己的镜像仓库地址，不要依赖历史上游镜像地址。
 
 ---

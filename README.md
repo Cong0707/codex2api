@@ -170,10 +170,15 @@ Vite 会自动代理 `/api` 和 `/health` 到后端，开发时访问 `http://lo
 | `DATABASE_NAME` | PostgreSQL 数据库名 |
 | `DATABASE_SSLMODE` | PostgreSQL SSL 模式，默认 `disable` |
 | `CACHE_DRIVER` | 缓存驱动，支持 `redis` / `memory` |
-| `REDIS_ADDR` | Redis 地址，例如 `redis:6379`，`CACHE_DRIVER=redis` 时生效 |
+| `REDIS_ADDR` | Redis 地址，例如 `redis:6379`、`redis://default:pass@host:6379/0`、`rediss://default:pass@host:6379/0`，`CACHE_DRIVER=redis` 时生效 |
+| `REDIS_USERNAME` | Redis ACL 用户名，可选；URL 中带用户名时可不填 |
 | `REDIS_PASSWORD` | Redis 密码 |
 | `REDIS_DB` | Redis DB 库号 |
+| `REDIS_TLS` | 是否为 `host:port` 形式的 Redis 启用 TLS；使用 `rediss://` 时会自动启用 |
+| `REDIS_INSECURE_SKIP_VERIFY` | 跳过 Redis TLS 证书校验，默认 `false`，仅用于自签证书或排障 |
 | `TZ` | 时区，例如 `Asia/Shanghai` |
+
+> Aiven、Upstash 等云 Redis 通常要求 TLS。推荐直接将 `REDIS_ADDR` 配置为平台提供的 `rediss://...` URL；如果只填写 `host:port`，请同时设置 `REDIS_TLS=true`。
 
 标准版 `.env.example` 已显式声明 `DATABASE_DRIVER=postgres` 与 `CACHE_DRIVER=redis`；SQLite 轻量版请改用 `.env.sqlite.example`。
 

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 )
@@ -25,6 +26,81 @@ func TestNewMemory_DefaultPoolSize(t *testing.T) {
 	tc := NewMemory(0)
 	if tc.PoolSize() != 1 {
 		t.Fatalf("PoolSize() = %d, want 1", tc.PoolSize())
+	}
+}
+
+func TestBuildRedisClientOptionsSupportsRedissURL(t *testing.T) {
+	opts, err := buildRedisClientOptions(RedisOptions{
+		Addr:     "rediss://default:secret@example.upstash.io:6379/2",
+		PoolSize: 42,
+	})
+	if err != nil {
+		t.Fatalf("buildRedisClientOptions() error = %v", err)
+	}
+	if opts.Addr != "example.upstash.io:6379" {
+		t.Fatalf("Addr = %q, want example.upstash.io:6379", opts.Addr)
+	}
+	if opts.Username != "default" {
+		t.Fatalf("Username = %q, want default", opts.Username)
+	}
+	if opts.Password != "secret" {
+		t.Fatalf("Password = %q, want secret", opts.Password)
+	}
+	if opts.DB != 2 {
+		t.Fatalf("DB = %d, want 2", opts.DB)
+	}
+	if opts.PoolSize != 42 {
+		t.Fatalf("PoolSize = %d, want 42", opts.PoolSize)
+	}
+	if opts.TLSConfig == nil {
+		t.Fatal("TLSConfig is nil for rediss URL")
+	}
+	if opts.TLSConfig.ServerName != "example.upstash.io" {
+		t.Fatalf("TLS ServerName = %q, want example.upstash.io", opts.TLSConfig.ServerName)
+	}
+}
+
+func TestBuildRedisClientOptionsSupportsHostPortTLS(t *testing.T) {
+	opts, err := buildRedisClientOptions(RedisOptions{
+		Addr:               "redis.example.com:6380",
+		Username:           "default",
+		Password:           "secret",
+		DB:                 1,
+		TLS:                true,
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		t.Fatalf("buildRedisClientOptions() error = %v", err)
+	}
+	if opts.Username != "default" || opts.Password != "secret" || opts.DB != 1 {
+		t.Fatalf("opts auth/db = %q/%q/%d, want default/secret/1", opts.Username, opts.Password, opts.DB)
+	}
+	if opts.TLSConfig == nil {
+		t.Fatal("TLSConfig is nil when TLS is enabled")
+	}
+	if opts.TLSConfig.ServerName != "redis.example.com" {
+		t.Fatalf("TLS ServerName = %q, want redis.example.com", opts.TLSConfig.ServerName)
+	}
+	if !opts.TLSConfig.InsecureSkipVerify {
+		t.Fatal("InsecureSkipVerify should be true")
+	}
+}
+
+func TestRedactRedisAddrMasksPassword(t *testing.T) {
+	got := RedactRedisAddr("rediss://default:secret@example.upstash.io:6379/0")
+	want := "rediss://default:redacted@example.upstash.io:6379/0"
+	if got != want {
+		t.Fatalf("RedactRedisAddr() = %q, want %q", got, want)
+	}
+}
+
+func TestRedisConnectionHintForEOFWithoutTLS(t *testing.T) {
+	got := redisConnectionHint(io.EOF, false)
+	if got == "" {
+		t.Fatal("redisConnectionHint() should include TLS hint for EOF without TLS")
+	}
+	if tlsHint := redisConnectionHint(io.EOF, true); tlsHint != "" {
+		t.Fatalf("redisConnectionHint() with TLS = %q, want empty", tlsHint)
 	}
 }
 

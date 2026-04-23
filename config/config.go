@@ -44,9 +44,12 @@ func (d *DatabaseConfig) Label() string {
 
 // RedisConfig Redis 核心配置
 type RedisConfig struct {
-	Addr     string
-	Password string
-	DB       int
+	Addr               string
+	Username           string
+	Password           string
+	DB                 int
+	TLS                bool
+	InsecureSkipVerify bool
 }
 
 // CacheConfig 缓存核心配置。
@@ -101,7 +104,7 @@ func Load(envPath string) (*Config, error) {
 	}
 
 	// WebSocket 配置
-	if v := strings.ToLower(strings.TrimSpace(os.Getenv("USE_WEBSOCKET"))); v == "true" || v == "1" {
+	if parseBoolEnv(os.Getenv("USE_WEBSOCKET")) {
 		cfg.UseWebsocket = true
 	}
 
@@ -123,13 +126,16 @@ func Load(envPath string) (*Config, error) {
 
 	// 缓存配置
 	cfg.Cache.Driver = normalizeDriver(os.Getenv("CACHE_DRIVER"), "redis")
-	cfg.Cache.Redis.Addr = os.Getenv("REDIS_ADDR")
+	cfg.Cache.Redis.Addr = strings.TrimSpace(os.Getenv("REDIS_ADDR"))
+	cfg.Cache.Redis.Username = strings.TrimSpace(os.Getenv("REDIS_USERNAME"))
 	cfg.Cache.Redis.Password = os.Getenv("REDIS_PASSWORD")
 	if v := os.Getenv("REDIS_DB"); v != "" {
 		if db, err := strconv.Atoi(v); err == nil {
 			cfg.Cache.Redis.DB = db
 		}
 	}
+	cfg.Cache.Redis.TLS = parseBoolEnv(os.Getenv("REDIS_TLS"))
+	cfg.Cache.Redis.InsecureSkipVerify = parseBoolEnv(os.Getenv("REDIS_INSECURE_SKIP_VERIFY"))
 
 	// 校验必填物理层配置
 	switch cfg.Database.Driver {
@@ -169,4 +175,13 @@ func normalizeDriver(value string, fallback string) string {
 		return fallback
 	}
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func parseBoolEnv(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }

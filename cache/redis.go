@@ -2,11 +2,27 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+// RedisOptions describes the Redis connection settings used by the token cache.
+type RedisOptions struct {
+	Addr               string
+	Username           string
+	Password           string
+	DB                 int
+	PoolSize           int
+	TLS                bool
+	InsecureSkipVerify bool
+}
 
 // redisTokenCache Redis Token 缓存（参考 sub2api OpenAITokenCache 接口）
 type redisTokenCache struct {
@@ -15,13 +31,23 @@ type redisTokenCache struct {
 
 // NewRedis 创建 Redis Token 缓存（poolSize <= 0 时使用默认值）。
 func NewRedis(addr, password string, db int, poolSize ...int) (TokenCache, error) {
-	opts := &redis.Options{
+	size := 0
+	if len(poolSize) > 0 && poolSize[0] > 0 {
+		size = poolSize[0]
+	}
+	return NewRedisWithOptions(RedisOptions{
 		Addr:     addr,
 		Password: password,
 		DB:       db,
-	}
-	if len(poolSize) > 0 && poolSize[0] > 0 {
-		opts.PoolSize = poolSize[0]
+		PoolSize: size,
+	})
+}
+
+// NewRedisWithOptions 创建 Redis Token 缓存，支持 redis:// / rediss:// URL 和 TLS。
+func NewRedisWithOptions(cfg RedisOptions) (TokenCache, error) {
+	opts, err := buildRedisClientOptions(cfg)
+	if err != nil {
+		return nil, err
 	}
 	client := redis.NewClient(opts)
 
@@ -29,10 +55,107 @@ func NewRedis(addr, password string, db int, poolSize ...int) (TokenCache, error
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("Redis 连接失败: %w", err)
+		_ = client.Close()
+		return nil, fmt.Errorf("Redis 连接失败: %w%s", err, redisConnectionHint(err, opts.TLSConfig != nil))
 	}
 
 	return &redisTokenCache{client: client}, nil
+}
+
+func buildRedisClientOptions(cfg RedisOptions) (*redis.Options, error) {
+	addr := strings.TrimSpace(cfg.Addr)
+	if addr == "" {
+		return nil, fmt.Errorf("Redis 地址不能为空")
+	}
+
+	var opts *redis.Options
+	if isRedisURL(addr) {
+		parsed, err := redis.ParseURL(addr)
+		if err != nil {
+			return nil, fmt.Errorf("Redis URL 格式错误: %w", err)
+		}
+		opts = parsed
+		if cfg.DB != 0 {
+			opts.DB = cfg.DB
+		}
+	} else {
+		opts = &redis.Options{
+			Addr: addr,
+			DB:   cfg.DB,
+		}
+	}
+
+	if strings.TrimSpace(cfg.Username) != "" {
+		opts.Username = strings.TrimSpace(cfg.Username)
+	}
+	if cfg.Password != "" {
+		opts.Password = cfg.Password
+	}
+	if cfg.PoolSize > 0 {
+		opts.PoolSize = cfg.PoolSize
+	}
+	if cfg.TLS || strings.HasPrefix(strings.ToLower(addr), "rediss://") {
+		ensureRedisTLSConfig(opts, cfg.InsecureSkipVerify)
+	} else if cfg.InsecureSkipVerify && opts.TLSConfig != nil {
+		opts.TLSConfig.InsecureSkipVerify = true
+	}
+	return opts, nil
+}
+
+func isRedisURL(addr string) bool {
+	lower := strings.ToLower(addr)
+	return strings.HasPrefix(lower, "redis://") || strings.HasPrefix(lower, "rediss://")
+}
+
+func ensureRedisTLSConfig(opts *redis.Options, insecureSkipVerify bool) {
+	if opts.TLSConfig == nil {
+		opts.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			ServerName: redisServerName(opts.Addr),
+		}
+	}
+	if opts.TLSConfig.MinVersion == 0 {
+		opts.TLSConfig.MinVersion = tls.VersionTLS12
+	}
+	if opts.TLSConfig.ServerName == "" {
+		opts.TLSConfig.ServerName = redisServerName(opts.Addr)
+	}
+	if insecureSkipVerify {
+		opts.TLSConfig.InsecureSkipVerify = true
+	}
+}
+
+func redisServerName(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(addr, "[]")
+}
+
+func redisConnectionHint(err error, tlsEnabled bool) string {
+	if tlsEnabled || err == nil {
+		return ""
+	}
+	if err == io.EOF || strings.Contains(strings.ToLower(err.Error()), "eof") {
+		return "（如果使用 Aiven / Upstash 等云 Redis，请使用 rediss:// 地址或设置 REDIS_TLS=true 启用 TLS）"
+	}
+	return ""
+}
+
+// RedactRedisAddr masks credentials in redis:// / rediss:// URLs for logs.
+func RedactRedisAddr(addr string) string {
+	parsed, err := url.Parse(addr)
+	if err != nil || parsed.User == nil || !isRedisURL(addr) {
+		return addr
+	}
+	username := parsed.User.Username()
+	if _, hasPassword := parsed.User.Password(); hasPassword {
+		parsed.User = url.UserPassword(username, "redacted")
+	} else {
+		parsed.User = url.User(username)
+	}
+	return parsed.String()
 }
 
 // Close 关闭 Redis 连接

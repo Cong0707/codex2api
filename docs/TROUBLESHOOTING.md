@@ -31,6 +31,7 @@ docker compose logs -f codex2api
 |----------|------|----------|
 | `DATABASE_HOST is empty` | 未配置数据库主机 | 检查 `.env` 文件 |
 | `REDIS_ADDR is empty` | Redis 模式未配置地址 | 检查 `.env` 文件 |
+| `Redis 连接失败: EOF` | 云 Redis 要求 TLS，但当前按明文连接 | 使用 `rediss://...` 地址，或设置 `REDIS_TLS=true` |
 | `DATABASE_PATH is empty` | SQLite 未配置路径 | 检查 `.env` 文件 |
 | `connection refused` | 数据库未就绪 | 等待依赖服务启动 |
 
