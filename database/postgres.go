@@ -193,13 +193,27 @@ func (db *DB) migrate(ctx context.Context) error {
 		proxy_url     VARCHAR(500) DEFAULT '',
 		status        VARCHAR(50) DEFAULT 'active',
 		error_message TEXT DEFAULT '',
-		created_at    TIMESTAMP DEFAULT NOW(),
-		updated_at    TIMESTAMP DEFAULT NOW()
+		deleted_at    TIMESTAMPTZ NULL,
+		created_at    TIMESTAMPTZ DEFAULT NOW(),
+		updated_at    TIMESTAMPTZ DEFAULT NOW()
 	);
 
 	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cooldown_reason VARCHAR(50) DEFAULT '';
-	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMP NULL;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMPTZ NULL;
 	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS public_api_key_id BIGINT NULL;
+		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS locked BOOLEAN DEFAULT FALSE;
+		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS score_bias_override INT NULL;
+		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS base_concurrency_override INT NULL;
+		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
+
+	UPDATE accounts
+		SET status = 'deleted',
+			error_message = '',
+			cooldown_reason = '',
+			cooldown_until = NULL,
+			deleted_at = COALESCE(deleted_at, updated_at, NOW()),
+			updated_at = NOW()
+		WHERE status <> 'deleted' AND COALESCE(error_message, '') = 'deleted';
 
 	CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
 	CREATE INDEX IF NOT EXISTS idx_accounts_status_id ON accounts(status, id);
@@ -2004,6 +2018,57 @@ func (db *DB) BatchSetError(ctx context.Context, ids []int64, errorMsg string) e
 	return nil
 }
 
+// SoftDeleteAccount 将账号标记为 deleted，保留数据用于审计和事件追溯。
+func (db *DB) SoftDeleteAccount(ctx context.Context, id int64) error {
+	query := `
+		UPDATE accounts
+		SET status = 'deleted',
+			error_message = '',
+			cooldown_reason = '',
+			cooldown_until = NULL,
+			deleted_at = CURRENT_TIMESTAMP,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = $1 AND status <> 'deleted'
+	`
+	_, err := db.conn.ExecContext(ctx, query, id)
+	return err
+}
+
+// BatchSoftDeleteAccounts 批量软删除账号，分批执行避免 SQL 参数过多。
+func (db *DB) BatchSoftDeleteAccounts(ctx context.Context, ids []int64) error {
+	const batchSize = 500
+	for i := 0; i < len(ids); i += batchSize {
+		end := i + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := ids[i:end]
+
+		placeholders := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch))
+		for j, id := range batch {
+			placeholders[j] = fmt.Sprintf("$%d", j+1)
+			args = append(args, id)
+		}
+
+		query := fmt.Sprintf(
+			`UPDATE accounts
+			SET status = 'deleted',
+				error_message = '',
+				cooldown_reason = '',
+				cooldown_until = NULL,
+				deleted_at = CURRENT_TIMESTAMP,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE status <> 'deleted' AND id IN (%s)`,
+			strings.Join(placeholders, ","),
+		)
+		if _, err := db.conn.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("batch %d-%d failed: %w", i, end, err)
+		}
+	}
+	return nil
+}
+
 // BatchInsertAccountEventsAsync 批量异步插入账号事件
 func (db *DB) BatchInsertAccountEventsAsync(ids []int64, eventType string, source string) {
 	go func() {
@@ -2086,7 +2151,7 @@ func (db *DB) CountAll(ctx context.Context) (int, error) {
 
 // GetAllRefreshTokens 获取所有已存在的 refresh_token（用于导入去重）
 func (db *DB) GetAllRefreshTokens(ctx context.Context) (map[string]bool, error) {
-	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts`)
+	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts WHERE status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`)
 	if err != nil {
 		return nil, err
 	}
@@ -2125,7 +2190,7 @@ func (db *DB) InsertATAccount(ctx context.Context, name string, accessToken stri
 
 // GetAllAccessTokens 获取所有已存在的 access_token（用于 AT 导入去重）
 func (db *DB) GetAllAccessTokens(ctx context.Context) (map[string]bool, error) {
-	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts`)
+	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts WHERE status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`)
 	if err != nil {
 		return nil, err
 	}

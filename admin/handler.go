@@ -1453,8 +1453,8 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
-	// 标记为 deleted 而非物理删除
-	if err := h.db.SetError(ctx, id, "deleted"); err != nil {
+	// 软删除：保留账号数据与事件记录，但从运行时池和 active 列表中移除。
+	if err := h.db.SoftDeleteAccount(ctx, id); err != nil {
 		writeError(c, http.StatusInternalServerError, "删除失败: "+err.Error())
 		return
 	}
