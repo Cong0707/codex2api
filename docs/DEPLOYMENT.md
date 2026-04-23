@@ -164,8 +164,46 @@ docker compose -f docker-compose.local.yml up -d --build
 docker compose -f docker-compose.local.yml logs -f codex2api
 ```
 
-### SQLite 容器构建
+如果你在 Docker 路线里启用 Redis，可参考下面这组环境变量：
 
+```env
+# 服务端口
+CODEX_PORT=8080
+
+# 管理后台密码（强密码推荐）
+ADMIN_SECRET=your-strong-password-here
+
+# 数据库配置（PostgreSQL 模式）
+DATABASE_DRIVER=postgres
+DATABASE_HOST=postgres
+DATABASE_PORT=5432
+DATABASE_USER=codex2api
+DATABASE_PASSWORD=your-db-password
+DATABASE_NAME=codex2api
+
+# Redis 配置
+CACHE_DRIVER=redis
+REDIS_ADDR=redis:6379
+REDIS_USERNAME=
+REDIS_PASSWORD=your-redis-password
+REDIS_DB=0
+REDIS_TLS=false
+REDIS_INSECURE_SKIP_VERIFY=false
+
+# 时区
+TZ=Asia/Shanghai
+```
+
+云 Redis（如 Aiven、Upstash）通常需要 TLS，可直接使用平台提供的 `rediss://` 连接串：
+
+```env
+CACHE_DRIVER=redis
+REDIS_ADDR=rediss://default:your-redis-password@your-redis-host:6379/0
+```
+
+**可选配置：**
+
+### SQLite 容器构建
 ```bash
 cp .env.sqlite.example .env
 docker compose -f docker-compose.sqlite.local.yml up -d --build

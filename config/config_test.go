@@ -182,6 +182,7 @@ func TestLoadReadsMaxRequestBodySizeFromEnv(t *testing.T) {
 		t.Fatalf("MaxRequestBodySize = %d, want %d", got, 64*1024*1024)
 	}
 }
+
 func TestLoadReadsRedisTLSSettings(t *testing.T) {
 	keys := []string{
 		"CODEX_PORT",
