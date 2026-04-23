@@ -1495,12 +1495,11 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 		}
 
 		account := &Account{
-			DBID:           row.ID,
-			RefreshToken:   rt,
-			ProxyURL:       strings.TrimSpace(row.ProxyURL),
-			HealthTier:     HealthTierWarm,
-			AddedAt:        row.CreatedAt.UnixNano(),
-			PublicAPIKeyID: 0,
+			DBID:         row.ID,
+			RefreshToken: rt,
+			ProxyURL:     strings.TrimSpace(row.ProxyURL),
+			HealthTier:   HealthTierWarm,
+			AddedAt:      row.CreatedAt.UnixNano(),
 		}
 		if row.PublicAPIKeyID.Valid {
 			account.PublicAPIKeyID = row.PublicAPIKeyID.Int64

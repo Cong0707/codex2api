@@ -161,6 +161,8 @@ curl http://localhost:8080/health
 | cooldown | 触发限流/错误冷却 | 等待冷却结束或手动清理 |
 | banned | 401 未授权 | 检查账号是否被封禁 |
 
+如果刷新账号时报 `unsupported_country_region_territory` 或 `Country, region, or territory not supported`，通常是刷新请求没有从支持地区出口发出。请检查账号自身 `proxy_url`、代理池和全局 `ProxyURL`，内部刷新链路按 `账号 proxy_url > 账号 ID 粘性代理池 > 全局 ProxyURL > 直连` 生效。
+
 **批量刷新脚本:**
 
 ```bash
