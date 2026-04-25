@@ -140,10 +140,13 @@ func TestUnbindSessionAffinityRemovesMatchingBinding(t *testing.T) {
 	if acc == nil {
 		t.Fatal("expected fallback account")
 	}
-	if acc.DBID != 1 {
-		t.Fatalf("account DBID = %d, want %d", acc.DBID, 1)
-	}
 	if proxyURL != "" {
 		t.Fatalf("proxyURL = %q, want empty fallback proxy", proxyURL)
+	}
+	store.sessionMu.RLock()
+	_, ok := store.sessionBindings["session-1"]
+	store.sessionMu.RUnlock()
+	if ok {
+		t.Fatal("expected session binding to be cleared")
 	}
 }

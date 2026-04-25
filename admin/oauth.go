@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -207,10 +206,16 @@ func (h *Handler) ExchangeOAuthCode(c *gin.Context) {
 		writeError(c, http.StatusBadGateway, "授权服务器未返回 refresh_token，请确认已开启 offline_access scope")
 		return
 	}
+	seed := normalizeTokenCredentialSeed(tokenCredentialSeed{
+		refreshToken: tokenResp.RefreshToken,
+		accessToken:  tokenResp.AccessToken,
+		idToken:      tokenResp.IDToken,
+		expiresIn:    tokenResp.ExpiresIn,
+	})
 
 	name := strings.TrimSpace(req.Name)
-	if name == "" && accountInfo != nil && accountInfo.Email != "" {
-		name = accountInfo.Email
+	if name == "" && seed.email != "" {
+		name = seed.email
 	}
 	if name == "" {
 		name = "oauth-account"
@@ -224,31 +229,27 @@ func (h *Handler) ExchangeOAuthCode(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "账号写入数据库失败: "+err.Error())
 		return
 	}
+	if err := h.db.UpdateCredentials(ctx, id, tokenCredentialMap(seed)); err != nil {
+		writeError(c, http.StatusInternalServerError, "Token 写入数据库失败: "+err.Error())
+		return
+	}
 	h.db.InsertAccountEventAsync(id, "added", "oauth")
 
-	newAcc := &auth.Account{
-		DBID:         id,
-		RefreshToken: tokenResp.RefreshToken,
-		ProxyURL:     proxyURL,
-	}
+	newAcc := accountFromCredentialSeed(id, proxyURL, seed)
 	h.store.AddAccount(newAcc)
-
-	go func(accountID int64) {
-		refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := h.store.RefreshSingle(refreshCtx, accountID); err != nil {
-			log.Printf("OAuth 账号 %d AT 刷新失败: %v", accountID, err)
-		} else {
-			log.Printf("OAuth 账号 %d 已加入号池", accountID)
-		}
-		h.triggerForcedPlanSync(accountID, "oauth_add")
-	}(id)
+	h.triggerForcedPlanSync(id, "oauth_add")
 
 	email := ""
 	planType := ""
 	if accountInfo != nil {
 		email = accountInfo.Email
 		planType = accountInfo.PlanType
+	}
+	if email == "" {
+		email = seed.email
+	}
+	if planType == "" {
+		planType = seed.planType
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -300,7 +301,31 @@ func doOAuthCodeExchange(ctx context.Context, code, codeVerifier, redirectURI, p
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, nil, fmt.Errorf("解析响应失败: %w", err)
 	}
+	if strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return nil, nil, fmt.Errorf("token 兑换响应缺少 access_token")
+	}
 
-	info := auth.ParseIDToken(tokenResp.IDToken)
+	info := accountInfoFromTokens(tokenResp.IDToken, tokenResp.AccessToken)
 	return &tokenResp, info, nil
+}
+
+// oauthCallbackPage 生成简单的 HTML 回调结果页面
+func oauthCallbackPage(title, message string, success bool) string {
+	color := "#e53e3e"
+	icon := "&#10060;"
+	if success {
+		color = "#38a169"
+		icon = "&#10004;"
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>%s</title>
+<style>
+body{font-family:-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f7fafc}
+.card{background:#fff;border-radius:12px;padding:40px;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center;max-width:420px}
+.icon{font-size:48px;margin-bottom:16px}
+h1{color:%s;font-size:24px;margin:0 0 12px}
+p{color:#4a5568;line-height:1.6;margin:0}
+</style></head>
+<body><div class="card"><div class="icon">%s</div><h1>%s</h1><p>%s</p></div></body></html>`,
+		title, color, icon, title, message)
 }

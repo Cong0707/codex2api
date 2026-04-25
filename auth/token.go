@@ -24,6 +24,10 @@ const (
 	MaxRetries    = 3
 )
 
+// ResinRequestDecorator 由外部注入，用于在 Resin 启用时改写请求 URL。
+// 参数: (originalURL, accountIdentifier) -> newURL
+var ResinRequestDecorator func(targetURL, accountID string) string
+
 // TokenData 保存一次 RT 刷新获得的 token 信息
 type TokenData struct {
 	AccessToken  string `json:"access_token"`
@@ -40,8 +44,9 @@ type AccountInfo struct {
 	PlanType         string `json:"chatgpt_plan_type"`
 }
 
-// RefreshAccessToken 用 RT 换取 AT
-func RefreshAccessToken(ctx context.Context, refreshToken string, proxyURL string) (*TokenData, *AccountInfo, error) {
+// RefreshAccessToken 用 RT 换取 AT。
+// resinAccountID 可选，Resin 启用时传入账号标识用于粘性代理。
+func RefreshAccessToken(ctx context.Context, refreshToken string, proxyURL string, resinAccountID ...string) (*TokenData, *AccountInfo, error) {
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {ClientID},
@@ -49,14 +54,31 @@ func RefreshAccessToken(ctx context.Context, refreshToken string, proxyURL strin
 		"scope":         {RefreshScopes},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TokenURL, strings.NewReader(data.Encode()))
+	targetURL := TokenURL
+	accountID := ""
+	if len(resinAccountID) > 0 {
+		accountID = resinAccountID[0]
+	}
+	if ResinRequestDecorator != nil && accountID != "" {
+		targetURL = ResinRequestDecorator(TokenURL, accountID)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	if ResinRequestDecorator != nil && accountID != "" {
+		req.Header.Set("X-Resin-Account", accountID)
+	}
 
-	client := buildHTTPClient(proxyURL)
+	var client *http.Client
+	if ResinRequestDecorator != nil && accountID != "" {
+		client = &http.Client{Timeout: 30 * time.Second}
+	} else {
+		client = buildHTTPClient(proxyURL)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("刷新请求失败: %w", err)
@@ -80,6 +102,15 @@ func RefreshAccessToken(ctx context.Context, refreshToken string, proxyURL strin
 	}
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+	tokenResp.AccessToken = strings.TrimSpace(tokenResp.AccessToken)
+	tokenResp.RefreshToken = strings.TrimSpace(tokenResp.RefreshToken)
+	tokenResp.IDToken = strings.TrimSpace(tokenResp.IDToken)
+	if tokenResp.AccessToken == "" {
+		return nil, nil, fmt.Errorf("刷新响应缺少 access_token")
+	}
+	if tokenResp.ExpiresIn <= 0 {
+		tokenResp.ExpiresIn = 3600
 	}
 
 	td := &TokenData{
@@ -105,7 +136,7 @@ func RefreshAccessToken(ctx context.Context, refreshToken string, proxyURL strin
 }
 
 // RefreshWithRetry 带重试的 RT 刷新
-func RefreshWithRetry(ctx context.Context, refreshToken string, proxyURL string) (*TokenData, *AccountInfo, error) {
+func RefreshWithRetry(ctx context.Context, refreshToken string, proxyURL string, resinAccountID ...string) (*TokenData, *AccountInfo, error) {
 	var lastErr error
 	for attempt := 0; attempt < MaxRetries; attempt++ {
 		if attempt > 0 {
@@ -117,7 +148,7 @@ func RefreshWithRetry(ctx context.Context, refreshToken string, proxyURL string)
 			}
 		}
 
-		td, info, err := RefreshAccessToken(ctx, refreshToken, proxyURL)
+		td, info, err := RefreshAccessToken(ctx, refreshToken, proxyURL, resinAccountID...)
 		if err == nil {
 			return td, info, nil
 		}
