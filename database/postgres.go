@@ -2086,7 +2086,7 @@ func (db *DB) CountAll(ctx context.Context) (int, error) {
 
 // GetAllRefreshTokens 获取所有已存在的 refresh_token（用于导入去重）
 func (db *DB) GetAllRefreshTokens(ctx context.Context) (map[string]bool, error) {
-	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts`)
+	rows, err := db.conn.QueryContext(ctx, `SELECT credentials, error_message FROM accounts`)
 	if err != nil {
 		return nil, err
 	}
@@ -2095,8 +2095,12 @@ func (db *DB) GetAllRefreshTokens(ctx context.Context) (map[string]bool, error) 
 	result := make(map[string]bool)
 	for rows.Next() {
 		var raw interface{}
-		if err := rows.Scan(&raw); err != nil {
+		var errorMessage string
+		if err := rows.Scan(&raw, &errorMessage); err != nil {
 			return nil, err
+		}
+		if strings.EqualFold(strings.TrimSpace(errorMessage), "deleted") {
+			continue
 		}
 		rt := credentialString(raw, "refresh_token")
 		if rt != "" {
@@ -2125,7 +2129,7 @@ func (db *DB) InsertATAccount(ctx context.Context, name string, accessToken stri
 
 // GetAllAccessTokens 获取所有已存在的 access_token（用于 AT 导入去重）
 func (db *DB) GetAllAccessTokens(ctx context.Context) (map[string]bool, error) {
-	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts`)
+	rows, err := db.conn.QueryContext(ctx, `SELECT credentials, error_message FROM accounts`)
 	if err != nil {
 		return nil, err
 	}
@@ -2134,8 +2138,12 @@ func (db *DB) GetAllAccessTokens(ctx context.Context) (map[string]bool, error) {
 	result := make(map[string]bool)
 	for rows.Next() {
 		var raw interface{}
-		if err := rows.Scan(&raw); err != nil {
+		var errorMessage string
+		if err := rows.Scan(&raw, &errorMessage); err != nil {
 			return nil, err
+		}
+		if strings.EqualFold(strings.TrimSpace(errorMessage), "deleted") {
+			continue
 		}
 		at := credentialString(raw, "access_token")
 		if at != "" {
