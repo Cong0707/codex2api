@@ -101,7 +101,9 @@ func (h *Handler) TestConnection(c *gin.Context) {
 		return
 	}
 
+	hasUsage := false
 	if usagePct, ok := proxy.ParseCodexUsageHeaders(resp, account); ok {
+		hasUsage = true
 		h.store.PersistUsageSnapshot(account, usagePct)
 	}
 
