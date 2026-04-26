@@ -163,12 +163,13 @@ func main() {
 	r.Use(api.RecoveryMiddleware())
 	r.Use(api.RequestContextMiddleware())
 	r.Use(api.VersionMiddleware())
+	security.MaxRequestBodySize = cfg.MaxRequestBodySize
+	r.Use(security.RequestSizeLimiter(int64(security.MaxRequestBodySize)))
 	r.Use(api.BodyCacheMiddleware())
 	r.Use(api.CORSMiddleware())
 	r.Use(api.SecurityHeadersMiddleware())
 	r.Use(loggerMiddleware())
 	r.Use(security.SecurityHeadersMiddleware())
-	r.Use(security.RequestSizeLimiter(security.MaxRequestBodySize))
 
 	// handler 不再接收 cfg.APIKeys
 	// 设备指纹默认走稳定模式，必要时可通过环境变量显式关闭。
@@ -257,8 +258,9 @@ func main() {
 	log.Printf("  API:    POST /v1/chat/completions")
 	log.Printf("  API:    POST /v1/responses")
 	log.Printf("  API:    POST /v1/responses/compact (compat)")
+	log.Printf("  API:    POST /v1/messages")
 	log.Printf("  API:    GET  /v1/models")
-	log.Printf("  Compat: POST /chat/completions, /responses, /responses/compact")
+	log.Printf("  Compat: POST /chat/completions, /responses, /responses/compact, /messages")
 	log.Printf("  Compat: GET  /models")
 	log.Println("==========================================")
 

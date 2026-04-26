@@ -389,6 +389,7 @@
     "cpuCores": "核心数 {{count}} 核",
     "memory": "内存",
     "memoryUsage": "使用 {{used}} / {{total}}",
+    "processMemory": "进程 {{size}}",
     "postgres": "PostgreSQL",
     "pgConn": "连接 {{open}} / {{max}}",
     "redis": "Redis",

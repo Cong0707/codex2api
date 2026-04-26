@@ -98,7 +98,7 @@ export default function Operations() {
                   <OpsMetricCard
                     label={t('ops.memory')}
                     value={`${overview.memory.percent.toFixed(1)}%`}
-                    sub={t('ops.memoryUsage', { used: formatBytes(overview.memory.used_bytes), total: formatBytes(overview.memory.total_bytes) })}
+                    sub={`${t('ops.memoryUsage', { used: formatBytes(overview.memory.used_bytes), total: formatBytes(overview.memory.total_bytes) })} · ${t('ops.processMemory', { size: formatBytes(overview.memory.process_bytes) })}`}
                     icon={<HardDrive className="size-5" />}
                     tone={getPercentTone(overview.memory.percent, 75, 90)}
                     t={t}

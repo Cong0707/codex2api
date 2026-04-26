@@ -106,17 +106,13 @@ func (h *Handler) syncPlanFromWhamUsage(ctx context.Context, account *auth.Accou
 	account.Mu().RLock()
 	accessToken := strings.TrimSpace(account.AccessToken)
 	accountID := strings.TrimSpace(account.AccountID)
-	accountProxy := strings.TrimSpace(account.ProxyURL)
 	currentPlan := auth.NormalizePlanType(account.PlanType)
 	account.Mu().RUnlock()
 	if accessToken == "" {
 		return "", fmt.Errorf("账号缺少 access_token")
 	}
 
-	proxyURL := accountProxy
-	if proxyURL == "" {
-		proxyURL = strings.TrimSpace(h.store.NextProxy())
-	}
+	proxyURL := h.store.ResolveProxyForAccount(account)
 
 	planCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -217,7 +213,7 @@ func (h *Handler) ProbeUsageSnapshot(ctx context.Context, account *auth.Account)
 	}
 
 	payload := buildTestPayload(h.store.GetTestModel())
-	proxyURL := h.store.NextProxy()
+	proxyURL := h.store.ResolveProxyForAccount(account)
 	resp, err := proxy.ExecuteRequest(ctx, account, payload, "", proxyURL, "", nil, nil)
 	if err != nil {
 		return err

@@ -850,11 +850,21 @@ type Store struct {
 	refreshScheduler atomic.Pointer[RefreshSchedulerIntegration]
 
 	allowRemoteMigration atomic.Bool // 是否允许远程迁移拉取账号
+	sessionMu            sync.RWMutex
+	sessionBindings      map[string]sessionAffinity
 }
 
 // AccountMatcher 用于在调度阶段对账号做额外过滤。
 // 返回 true 表示该账号允许参与本次调度。
 type AccountMatcher func(*Account) bool
+
+type sessionAffinity struct {
+	accountID int64
+	proxyURL  string
+	expiresAt time.Time
+}
+
+const sessionAffinityTTL = 30 * time.Minute
 
 func fastSchedulerEnabledFromEnv() bool {
 	for _, key := range []string{"FAST_SCHEDULER_ENABLED", "CODEX_FAST_SCHEDULER"} {
@@ -1195,8 +1205,57 @@ func (s *Store) NextProxy() string {
 	if !enabled || len(pool) == 0 {
 		return s.GetProxyURL() // fallback 全局单代理
 	}
-	idx := atomic.AddUint64(&s.proxyRoundRobin, 1)
-	return pool[idx%uint64(len(pool))]
+	start := int(atomic.AddUint64(&s.proxyRoundRobin, 1)-1) % len(pool)
+	for i := 0; i < len(pool); i++ {
+		if proxy := strings.TrimSpace(pool[(start+i)%len(pool)]); proxy != "" {
+			return proxy
+		}
+	}
+	return s.GetProxyURL()
+}
+
+// ResolveProxyForAccount 返回账号内部调用应使用的有效代理。
+// 优先级：账号自带代理 > 代理池粘性代理 > 全局代理 > 直连。
+func (s *Store) ResolveProxyForAccount(acc *Account) string {
+	if s == nil {
+		return ""
+	}
+
+	var accountID int64
+	if acc != nil {
+		acc.mu.RLock()
+		accountID = acc.DBID
+		if proxy := strings.TrimSpace(acc.ProxyURL); proxy != "" {
+			acc.mu.RUnlock()
+			return proxy
+		}
+		acc.mu.RUnlock()
+	}
+
+	return s.resolveFallbackProxyForAccount(accountID)
+}
+
+func (s *Store) resolveFallbackProxyForAccount(accountID int64) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.proxyPoolEnabled && len(s.proxyPool) > 0 {
+		start := stickyProxyIndex(accountID, len(s.proxyPool))
+		for i := 0; i < len(s.proxyPool); i++ {
+			if proxy := strings.TrimSpace(s.proxyPool[(start+i)%len(s.proxyPool)]); proxy != "" {
+				return proxy
+			}
+		}
+	}
+
+	return strings.TrimSpace(s.globalProxy)
+}
+
+func stickyProxyIndex(accountID int64, poolSize int) int {
+	if poolSize <= 1 || accountID <= 0 {
+		return 0
+	}
+	return int((accountID - 1) % int64(poolSize))
 }
 
 // GetProxyPoolEnabled 获取代理池开关状态
@@ -1346,15 +1405,10 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 			continue
 		}
 
-		proxy := row.ProxyURL
-		if proxy == "" {
-			proxy = s.globalProxy
-		}
-
 		account := &Account{
 			DBID:           row.ID,
 			RefreshToken:   rt,
-			ProxyURL:       proxy,
+			ProxyURL:       strings.TrimSpace(row.ProxyURL),
 			HealthTier:     HealthTierWarm,
 			AddedAt:        row.CreatedAt.UnixNano(),
 			PublicAPIKeyID: 0,
@@ -1625,6 +1679,111 @@ func (s *Store) NextMatching(exclude map[int64]bool, matcher AccountMatcher) *Ac
 	return best
 }
 
+// BindSessionAffinity 记录会话与账号/代理的亲和关系。
+func (s *Store) BindSessionAffinity(key string, account *Account, proxyURL string) {
+	if s == nil || account == nil {
+		return
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+
+	s.sessionMu.Lock()
+	if s.sessionBindings == nil {
+		s.sessionBindings = make(map[string]sessionAffinity)
+	}
+	s.sessionBindings[key] = sessionAffinity{
+		accountID: account.DBID,
+		proxyURL:  strings.TrimSpace(proxyURL),
+		expiresAt: time.Now().Add(sessionAffinityTTL),
+	}
+	s.sessionMu.Unlock()
+}
+
+// UnbindSessionAffinity 仅当绑定仍指向失败账号时清除会话亲和。
+func (s *Store) UnbindSessionAffinity(key string, accountID int64) {
+	if s == nil || accountID == 0 {
+		return
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+
+	s.sessionMu.Lock()
+	if binding, ok := s.sessionBindings[key]; ok && binding.accountID == accountID {
+		delete(s.sessionBindings, key)
+	}
+	s.sessionMu.Unlock()
+}
+
+// NextForSession 优先复用已绑定的账号和代理，失败时回退到普通选号。
+func (s *Store) NextForSession(key string, exclude map[int64]bool, matcher AccountMatcher) (*Account, string) {
+	if s == nil {
+		return nil, ""
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return s.NextMatching(exclude, matcher), ""
+	}
+
+	now := time.Now()
+	s.sessionMu.RLock()
+	binding, ok := s.sessionBindings[key]
+	s.sessionMu.RUnlock()
+
+	if ok {
+		if !binding.expiresAt.After(now) {
+			s.sessionMu.Lock()
+			if current, exists := s.sessionBindings[key]; exists && !current.expiresAt.After(now) {
+				delete(s.sessionBindings, key)
+			}
+			s.sessionMu.Unlock()
+		} else if acc := s.takeByIDExcluding(binding.accountID, exclude, matcher); acc != nil {
+			return acc, binding.proxyURL
+		}
+	}
+
+	return s.NextMatching(exclude, matcher), ""
+}
+
+func (s *Store) takeByIDExcluding(id int64, exclude map[int64]bool, matcher AccountMatcher) *Account {
+	if s == nil || id == 0 {
+		return nil
+	}
+	if exclude != nil && exclude[id] {
+		return nil
+	}
+
+	s.mu.RLock()
+	var target *Account
+	for _, acc := range s.accounts {
+		if acc != nil && acc.DBID == id {
+			target = acc
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	if target == nil || !target.IsAvailable() {
+		return nil
+	}
+	if matcher != nil && !matcher(target) {
+		return nil
+	}
+
+	maxConcurrency := atomic.LoadInt64(&s.maxConcurrency)
+	_, _, limit := target.schedulerSnapshot(maxConcurrency)
+	if limit <= 0 {
+		return nil
+	}
+	if !tryAcquireAccount(target, limit) {
+		return nil
+	}
+	return target
+}
+
 // WaitForAvailable 等待可用账号（带超时的请求排队）
 func (s *Store) WaitForAvailable(ctx context.Context, timeout time.Duration) *Account {
 	return s.WaitForAvailableMatching(ctx, timeout, nil, nil)
@@ -1661,6 +1820,41 @@ func (s *Store) WaitForAvailableMatching(ctx context.Context, timeout time.Durat
 				return nil
 			case <-deadline.C:
 				return nil
+			}
+		}
+	}
+}
+
+// WaitForSessionAvailable 等待满足过滤条件的可用账号，并优先遵守会话亲和绑定。
+func (s *Store) WaitForSessionAvailable(ctx context.Context, key string, timeout time.Duration, exclude map[int64]bool, matcher AccountMatcher) (*Account, string) {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	backoff := 50 * time.Millisecond
+	backoffTimer := time.NewTimer(backoff)
+	defer backoffTimer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ""
+		case <-deadline.C:
+			return nil, ""
+		default:
+			acc, proxyURL := s.NextForSession(key, exclude, matcher)
+			if acc != nil {
+				return acc, proxyURL
+			}
+			backoffTimer.Reset(backoff)
+			select {
+			case <-backoffTimer.C:
+				if backoff < 500*time.Millisecond {
+					backoff *= 2
+				}
+			case <-ctx.Done():
+				return nil, ""
+			case <-deadline.C:
+				return nil, ""
 			}
 		}
 	}
@@ -2624,7 +2818,6 @@ func (s *Store) parallelRefreshAll(ctx context.Context) {
 func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 	acc.mu.RLock()
 	rt := acc.RefreshToken
-	proxy := acc.ProxyURL
 	dbID := acc.DBID
 	cooldownUntil := acc.CooldownUtil
 	cooldownReason := acc.CooldownReason
@@ -2633,10 +2826,7 @@ func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 	expiredCooldown := acc.Status == StatusCooldown && !time.Now().Before(acc.CooldownUtil) && !rateLimitedHold
 	acc.mu.RUnlock()
 
-	// RT 刷新优先使用账号自带代理；为空时回退到代理池/全局代理。
-	if strings.TrimSpace(proxy) == "" {
-		proxy = s.NextProxy()
-	}
+	proxy := s.ResolveProxyForAccount(acc)
 
 	// 1. 尝试从缓存读取 AT
 	cachedToken, err := s.tokenCache.GetAccessToken(ctx, dbID)

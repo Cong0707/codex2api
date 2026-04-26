@@ -26,8 +26,8 @@ type ValidationError struct {
 
 // ValidationResult contains all validation errors
 type ValidationResult struct {
-	Valid  bool               `json:"valid"`
-	Errors []ValidationError  `json:"errors"`
+	Valid  bool              `json:"valid"`
+	Errors []ValidationError `json:"errors"`
 }
 
 // Validator provides request validation capabilities
@@ -380,21 +380,21 @@ func MaxItems(max int) ValidationRule {
 // Validation is kept permissive to maintain backward compatibility.
 func ChatCompletionValidationRules() map[string][]ValidationRule {
 	return map[string][]ValidationRule{
-		"model":        {Required(), TypeString(), MaxLength(64)},
-		"messages":     {Required(), TypeArray(), MinItems(1), MaxItems(4096), ValidateMessages()},
-		"max_tokens":   {TypeNumber(), MinValue(1), MaxValue(65536)},
-		"temperature":  {TypeNumber(), Range(0, 2)},
-		"top_p":        {TypeNumber(), Range(0, 1)},
-		"n":            {TypeNumber(), MinValue(1), MaxValue(1)},
-		"stream":       {TypeBoolean()},
+		"model":       {Required(), TypeString(), MaxLength(64)},
+		"messages":    {Required(), TypeArray(), MinItems(1), MaxItems(4096), ValidateMessages()},
+		"max_tokens":  {TypeNumber(), MinValue(1), MaxValue(65536)},
+		"temperature": {TypeNumber(), Range(0, 2)},
+		"top_p":       {TypeNumber(), Range(0, 1)},
+		"n":           {TypeNumber(), MinValue(1), MaxValue(1)},
+		"stream":      {TypeBoolean()},
 		// stop and tool_choice are intentionally not strictly validated
 		// as they are ignored during request translation
 		"presence_penalty":  {TypeNumber(), Range(-2, 2)},
 		"frequency_penalty": {TypeNumber(), Range(-2, 2)},
-		"user":         {TypeString(), MaxLength(256)},
-		"reasoning_effort":  {TypeString(), Enum("low", "medium", "high", "xhigh")},
+		"user":              {TypeString(), MaxLength(256)},
+		"reasoning_effort":  {TypeString(), MaxLength(64)},
 		"service_tier":      {TypeString(), MaxLength(64)},
-		"tools":             {TypeArray(), MaxItems(128)},
+		"tools":             {TypeArray()},
 		// tool_choice removed from strict validation to maintain backward compatibility
 	}
 }
@@ -403,7 +403,7 @@ func ChatCompletionValidationRules() map[string][]ValidationRule {
 // Note: input can be either a string or an array of items (validated separately)
 func ResponsesAPIValidationRules() map[string][]ValidationRule {
 	return map[string][]ValidationRule{
-		"model":             {Required(), TypeString(), MaxLength(64)},
+		"model": {Required(), TypeString(), MaxLength(64)},
 		// input validation is handled separately to support both string and array formats
 		"max_output_tokens": {TypeNumber(), MinValue(1), MaxValue(65536)},
 		"temperature":       {TypeNumber(), Range(0, 2)},
@@ -411,11 +411,11 @@ func ResponsesAPIValidationRules() map[string][]ValidationRule {
 		"stream":            {TypeBoolean()},
 		"stop":              {TypeString(), MaxLength(256)},
 		"user":              {TypeString(), MaxLength(256)},
-		"reasoning.effort":  {TypeString(), Enum("low", "medium", "high", "xhigh")},
+		"reasoning.effort":  {TypeString(), MaxLength(64)},
 		"service_tier":      {TypeString(), MaxLength(64)},
 		"store":             {TypeBoolean()},
 		"truncation":        {TypeString(), Enum("auto", "disabled")},
-		"tools":             {TypeArray(), MaxItems(128)},
+		"tools":             {TypeArray()},
 		"tool_choice":       {TypeString(), MaxLength(64)},
 	}
 }
@@ -560,11 +560,11 @@ func ValidateMessages() ValidationRule {
 		}
 
 		validRoles := map[string]bool{
-			"system":     true,
-			"developer":  true,
-			"user":       true,
-			"assistant":  true,
-			"tool":       true,
+			"system":    true,
+			"developer": true,
+			"user":      true,
+			"assistant": true,
+			"tool":      true,
 		}
 
 		for i := 0; i < int(value.Get("#").Int()); i++ {
@@ -617,11 +617,11 @@ func ValidateInput() ValidationRule {
 		}
 
 		validTypes := map[string]bool{
-			"message":                true,
-			"function_call":          true,
-			"function_call_output":   true,
-			"file":                   true,
-			"image":                  true,
+			"message":              true,
+			"function_call":        true,
+			"function_call_output": true,
+			"file":                 true,
+			"image":                true,
 		}
 
 		for i := 0; i < int(value.Get("#").Int()); i++ {

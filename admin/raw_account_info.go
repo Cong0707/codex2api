@@ -184,7 +184,6 @@ func (h *Handler) prepareRawInfoContext(c *gin.Context) (*rawInfoContext, bool) 
 	account.Mu().RLock()
 	accessToken := strings.TrimSpace(account.AccessToken)
 	accountID := strings.TrimSpace(account.AccountID)
-	accountProxy := strings.TrimSpace(account.ProxyURL)
 	account.Mu().RUnlock()
 
 	if accessToken == "" {
@@ -192,10 +191,7 @@ func (h *Handler) prepareRawInfoContext(c *gin.Context) (*rawInfoContext, bool) 
 		return nil, false
 	}
 
-	proxyURL := strings.TrimSpace(h.store.NextProxy())
-	if proxyURL == "" {
-		proxyURL = accountProxy
-	}
+	proxyURL := h.store.ResolveProxyForAccount(account)
 
 	rowCtx, rowCancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer rowCancel()

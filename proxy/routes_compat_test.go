@@ -28,6 +28,10 @@ func TestRegisterRoutes_OpenAICompatibilityPaths(t *testing.T) {
 		{method: http.MethodPost, path: "/responses"},
 		{method: http.MethodPost, path: "/v1/responses/compact"},
 		{method: http.MethodPost, path: "/responses/compact"},
+		{method: http.MethodPost, path: "/v1/messages"},
+		{method: http.MethodPost, path: "/messages"},
+		{method: http.MethodPost, path: "/backend-api/codex/responses"},
+		{method: http.MethodPost, path: "/backend-api/codex/responses/compact"},
 		{method: http.MethodGet, path: "/v1/models"},
 		{method: http.MethodGet, path: "/models"},
 	}

@@ -1,0 +1,961 @@
+package proxy
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
+)
+
+// ==================== Anthropic Messages API 类型定义 ====================
+
+// anthropicRequest 表示 Anthropic Messages API 请求
+type anthropicRequest struct {
+	Model       string             `json:"model"`
+	MaxTokens   int                `json:"max_tokens"`
+	System      json.RawMessage    `json:"system,omitempty"`
+	Messages    []anthropicMessage `json:"messages"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
+	Stream      bool               `json:"stream,omitempty"`
+	Temperature *float64           `json:"temperature,omitempty"`
+	TopP        *float64           `json:"top_p,omitempty"`
+	StopSeqs    []string           `json:"stop_sequences,omitempty"`
+	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+	ToolChoice  json.RawMessage    `json:"tool_choice,omitempty"`
+	Metadata    json.RawMessage    `json:"metadata,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+}
+
+type anthropicMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// anthropicContentBlock 统一内容块（text/thinking/tool_use/tool_result/image）
+type anthropicContentBlock struct {
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	Thinking  string                `json:"thinking,omitempty"`
+	Source    *anthropicImageSource `json:"source,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     json.RawMessage       `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage       `json:"content,omitempty"`
+	IsError   bool                  `json:"is_error,omitempty"`
+}
+
+type anthropicImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
+type anthropicTool struct {
+	Type        string          `json:"type,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// ==================== Anthropic 响应类型 ====================
+
+// anthropicResponse 非流式响应
+type anthropicResponse struct {
+	ID           string                  `json:"id"`
+	Type         string                  `json:"type"`
+	Role         string                  `json:"role"`
+	Content      []anthropicContentBlock `json:"content"`
+	Model        string                  `json:"model"`
+	StopReason   string                  `json:"stop_reason"`
+	StopSequence *string                 `json:"stop_sequence"`
+	Usage        anthropicUsage          `json:"usage"`
+}
+
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
+// ==================== Anthropic 流式事件类型 ====================
+
+type anthropicStreamEvent struct {
+	Type         string                 `json:"type"`
+	Message      *anthropicResponse     `json:"message,omitempty"`
+	Index        *int                   `json:"index,omitempty"`
+	ContentBlock *anthropicContentBlock `json:"content_block,omitempty"`
+	Delta        *anthropicDelta        `json:"delta,omitempty"`
+	Usage        *anthropicUsage        `json:"usage,omitempty"`
+}
+
+type anthropicDelta struct {
+	Type        string `json:"type,omitempty"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	Thinking    string `json:"thinking,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
+}
+
+// ==================== 模型映射 ====================
+
+// defaultAnthropicModelMap 默认的模型映射（当数据库中无配置时使用）
+var defaultAnthropicModelMap = map[string]string{
+	"claude-opus-4-6":            "gpt-5.4",
+	"claude-opus-4-6-20250610":   "gpt-5.4",
+	"claude-haiku-4-5-20251001":  "gpt-5.4-mini",
+	"claude-haiku-4-5":           "gpt-5.4-mini",
+	"claude-sonnet-4-6":          "gpt-5.3-codex",
+	"claude-sonnet-4-5-20250929": "gpt-5.2",
+	"claude-opus-4-5-20251101":   "gpt-5.3-codex",
+	"claude-sonnet-4-5-20250514": "gpt-5.4",
+	"claude-sonnet-4-5":          "gpt-5.4",
+	"claude-sonnet-4.5":          "gpt-5.4",
+	"claude-sonnet-4-20250514":   "gpt-5.4",
+	"claude-sonnet-4":            "gpt-5.4",
+	"claude-opus-4-20250514":     "gpt-5.4",
+	"claude-opus-4":              "gpt-5.4",
+	"claude-3-5-sonnet-20241022": "gpt-5.4",
+	"claude-3-5-haiku-20241022":  "gpt-5.4-mini",
+}
+
+// resolveAnthropicModel 将 Anthropic 模型名解析为 Codex 模型名
+// 优先使用数据库中的动态映射，回退到默认映射
+func resolveAnthropicModel(model string, dynamicMappingJSON string, supportedModels []string) string {
+	// 1. 尝试动态映射（从系统设置）
+	if dynamicMappingJSON != "" && dynamicMappingJSON != "{}" {
+		var dynamicMap map[string]string
+		if json.Unmarshal([]byte(dynamicMappingJSON), &dynamicMap) == nil {
+			if mapped, ok := dynamicMap[model]; ok && mapped != "" {
+				return mapped
+			}
+		}
+	}
+
+	// 2. 尝试默认映射
+	if mapped, ok := defaultAnthropicModelMap[model]; ok {
+		return mapped
+	}
+
+	// 3. 允许直接传入 Codex 模型名
+	for _, supported := range supportedModels {
+		if model == supported {
+			return model
+		}
+	}
+
+	// 4. 模糊匹配
+	lower := strings.ToLower(model)
+	if strings.Contains(lower, "haiku") {
+		return "gpt-5.4-mini"
+	}
+	if strings.Contains(lower, "claude") {
+		return "gpt-5.4"
+	}
+
+	// 5. 默认
+	if len(supportedModels) > 0 {
+		return supportedModels[0]
+	}
+	return "gpt-5.4"
+}
+
+// ==================== Call ID 转换 ====================
+
+// toCodexCallID 将 Anthropic tool_use id 转换为 Codex call_id
+func toCodexCallID(anthropicID string) string {
+	if strings.HasPrefix(anthropicID, "fc_") {
+		return anthropicID
+	}
+	return "fc_" + anthropicID
+}
+
+// fromCodexCallID 将 Codex call_id 转回 Anthropic tool_use id
+func fromCodexCallID(codexID string) string {
+	if after, ok := strings.CutPrefix(codexID, "fc_"); ok {
+		if strings.HasPrefix(after, "toolu_") || strings.HasPrefix(after, "call_") {
+			return after
+		}
+	}
+	return codexID
+}
+
+// ==================== 请求翻译: Anthropic Messages → Codex Responses ====================
+
+// TranslateAnthropicToCodex 将 Anthropic Messages 请求转换为 Codex Responses 格式
+// 返回: (codex 请求体, 原始 Anthropic model 名, error)
+func TranslateAnthropicToCodex(rawJSON []byte, modelMappingJSON string) ([]byte, string, error) {
+	return TranslateAnthropicToCodexWithModels(rawJSON, modelMappingJSON, SupportedModels)
+}
+
+// TranslateAnthropicToCodexWithModels 将 Anthropic Messages 请求转换为 Codex Responses 格式
+// 返回: (codex 请求体, 原始 Anthropic model 名, error)
+func TranslateAnthropicToCodexWithModels(rawJSON []byte, modelMappingJSON string, supportedModels []string) ([]byte, string, error) {
+	var req anthropicRequest
+	if err := json.Unmarshal(rawJSON, &req); err != nil {
+		return nil, "", fmt.Errorf("parse anthropic request: %w", err)
+	}
+
+	originalModel := req.Model
+	codexModel := resolveAnthropicModel(req.Model, modelMappingJSON, supportedModels)
+
+	// 构建 input 数组
+	input := buildCodexInput(req.System, req.Messages)
+
+	// 构建输出 map（对齐 PrepareResponsesBody 的字段处理）
+	out := map[string]any{
+		"model":   codexModel,
+		"stream":  true,
+		"store":   false,
+		"include": []string{"reasoning.encrypted_content"},
+		"input":   input,
+	}
+
+	// 注意：不设置 max_output_tokens，上游 Codex 不支持该字段
+
+	// reasoning effort（仅设置 effort，不设置 summary）
+	effort := resolveReasoningEffort(req.Thinking)
+	if effort != "" && effort != "high" {
+		out["reasoning"] = map[string]any{"effort": effort}
+	}
+
+	// tools
+	if len(req.Tools) > 0 {
+		out["tools"] = convertAnthropicTools(req.Tools)
+	}
+
+	// tool_choice
+	if len(req.ToolChoice) > 0 {
+		if tc := convertAnthropicToolChoice(req.ToolChoice); tc != nil {
+			out["tool_choice"] = tc
+		}
+	}
+
+	body, err := json.Marshal(out)
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal codex request: %w", err)
+	}
+	return body, originalModel, nil
+}
+
+// buildCodexInput 将 Anthropic system + messages 转换为 Codex input 数组
+func buildCodexInput(system json.RawMessage, messages []anthropicMessage) []any {
+	var input []any
+
+	// system prompt → developer message
+	if sysText := parseAnthropicSystem(system); sysText != "" {
+		input = append(input, map[string]any{
+			"type": "message",
+			"role": "developer",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": sysText},
+			},
+		})
+	}
+
+	for _, msg := range messages {
+		blocks := parseAnthropicContent(msg.Content)
+		switch msg.Role {
+		case "user":
+			input = appendUserBlocks(input, blocks)
+		case "assistant":
+			input = appendAssistantBlocks(input, blocks)
+		}
+	}
+	return input
+}
+
+// parseAnthropicSystem 解析 system 字段（string 或 []block）
+func parseAnthropicSystem(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	// 尝试纯字符串
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	// 尝试块数组
+	var blocks []anthropicContentBlock
+	if json.Unmarshal(raw, &blocks) == nil {
+		var parts []string
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	}
+	return ""
+}
+
+// parseAnthropicContent 解析 message content（string 或 []block）
+func parseAnthropicContent(raw json.RawMessage) []anthropicContentBlock {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	// 尝试纯字符串
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return []anthropicContentBlock{{Type: "text", Text: s}}
+	}
+	// 尝试块数组
+	var blocks []anthropicContentBlock
+	if json.Unmarshal(raw, &blocks) == nil {
+		return blocks
+	}
+	return nil
+}
+
+// appendUserBlocks 将 user 消息的内容块转换并追加到 input
+func appendUserBlocks(input []any, blocks []anthropicContentBlock) []any {
+	var contentParts []any
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			contentParts = append(contentParts, map[string]any{"type": "input_text", "text": b.Text})
+		case "image":
+			if b.Source != nil {
+				dataURI := fmt.Sprintf("data:%s;base64,%s", b.Source.MediaType, b.Source.Data)
+				contentParts = append(contentParts, map[string]any{"type": "input_image", "image_url": dataURI})
+			}
+		case "tool_result":
+			// tool_result → function_call_output（独立 item）
+			output := extractToolResultText(b)
+			input = append(input, map[string]any{
+				"type":    "function_call_output",
+				"call_id": toCodexCallID(b.ToolUseID),
+				"output":  output,
+			})
+		}
+	}
+	if len(contentParts) > 0 {
+		input = append(input, map[string]any{
+			"type":    "message",
+			"role":    "user",
+			"content": contentParts,
+		})
+	}
+	return input
+}
+
+// appendAssistantBlocks 将 assistant 消息的内容块转换并追加到 input
+func appendAssistantBlocks(input []any, blocks []anthropicContentBlock) []any {
+	var textParts []any
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			textParts = append(textParts, map[string]any{"type": "output_text", "text": b.Text})
+		case "tool_use":
+			// 先把已有文本作为 message 输出
+			if len(textParts) > 0 {
+				input = append(input, map[string]any{
+					"type":    "message",
+					"role":    "assistant",
+					"content": textParts,
+				})
+				textParts = nil
+			}
+			args := "{}"
+			if len(b.Input) > 0 {
+				args = string(b.Input)
+			}
+			input = append(input, map[string]any{
+				"type":      "function_call",
+				"call_id":   toCodexCallID(b.ID),
+				"name":      b.Name,
+				"arguments": args,
+			})
+		case "thinking":
+			// thinking 块跳过（Codex 不接受 thinking 作为输入）
+		}
+	}
+	if len(textParts) > 0 {
+		input = append(input, map[string]any{
+			"type":    "message",
+			"role":    "assistant",
+			"content": textParts,
+		})
+	}
+	return input
+}
+
+// extractToolResultText 从 tool_result 块提取文本输出
+func extractToolResultText(b anthropicContentBlock) string {
+	// content 可能是 string 或 []block
+	if len(b.Content) == 0 || string(b.Content) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(b.Content, &s) == nil {
+		return s
+	}
+	var blocks []anthropicContentBlock
+	if json.Unmarshal(b.Content, &blocks) == nil {
+		var parts []string
+		for _, cb := range blocks {
+			if cb.Type == "text" && cb.Text != "" {
+				parts = append(parts, cb.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return string(b.Content)
+}
+
+// resolveReasoningEffort 从 thinking 配置推断 reasoning effort
+func resolveReasoningEffort(thinking *anthropicThinking) string {
+	if thinking == nil || thinking.Type != "enabled" {
+		return "high" // 默认
+	}
+	budget := thinking.BudgetTokens
+	switch {
+	case budget <= 0:
+		return "high"
+	case budget < 2048:
+		return "low"
+	case budget < 8192:
+		return "medium"
+	case budget < 20000:
+		return "high"
+	default:
+		return "xhigh"
+	}
+}
+
+// convertAnthropicTools 将 Anthropic 工具格式转为 Codex 格式
+func convertAnthropicTools(tools []anthropicTool) []any {
+	result := make([]any, 0, len(tools))
+	for _, t := range tools {
+		item := map[string]any{
+			"type": "function",
+			"name": t.Name,
+		}
+		if t.Description != "" {
+			item["description"] = t.Description
+		}
+		if len(t.InputSchema) > 0 {
+			var params map[string]any
+			if json.Unmarshal(t.InputSchema, &params) == nil {
+				sanitizeSchemaForUpstream(params)
+				item["parameters"] = params
+			}
+		}
+		result = append(result, item)
+	}
+	if len(result) > maxTools {
+		result = result[:maxTools]
+	}
+	return result
+}
+
+// convertAnthropicToolChoice 将 Anthropic tool_choice 转为 Codex 格式
+func convertAnthropicToolChoice(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	// 尝试对象格式
+	var tc struct {
+		Type string `json:"type"`
+		Name string `json:"name,omitempty"`
+	}
+	if json.Unmarshal(raw, &tc) != nil {
+		return nil
+	}
+	switch tc.Type {
+	case "auto":
+		return "auto"
+	case "any":
+		return "required"
+	case "none":
+		return "none"
+	case "tool":
+		if tc.Name != "" {
+			return map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name": tc.Name,
+				},
+			}
+		}
+		return "auto"
+	default:
+		return nil
+	}
+}
+
+// ==================== 响应翻译: Codex SSE → Anthropic ====================
+
+// anthropicStreamTranslator 有状态的流式响应翻译器（Codex → Anthropic）
+type anthropicStreamTranslator struct {
+	model              string
+	responseID         string
+	messageStartSent   bool
+	contentBlockIndex  int
+	contentBlockOpen   bool
+	currentBlockType   string // "text" | "thinking" | "tool_use"
+	currentToolUseID   string
+	currentToolUseName string
+	hasToolUse         bool
+	inputTokens        int
+	outputTokens       int
+	cachedTokens       int
+}
+
+// newAnthropicStreamTranslator 创建流式翻译器
+func newAnthropicStreamTranslator(model string) *anthropicStreamTranslator {
+	return &anthropicStreamTranslator{
+		model:      model,
+		responseID: "msg_" + uuid.New().String()[:24],
+	}
+}
+
+// translateEvent 将单个 Codex SSE 事件翻译为零或多个 Anthropic SSE 事件
+func (t *anthropicStreamTranslator) translateEvent(eventData []byte) []anthropicStreamEvent {
+	eventType := gjson.GetBytes(eventData, "type").String()
+
+	switch eventType {
+	case "response.created":
+		return t.handleCreated()
+
+	case "response.output_item.added":
+		return t.handleOutputItemAdded(eventData)
+
+	case "response.output_text.delta":
+		return t.handleTextDelta(eventData)
+
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		return t.handleThinkingDelta(eventData)
+
+	case "response.function_call_arguments.delta":
+		return t.handleToolInputDelta(eventData)
+
+	case "response.output_text.done", "response.reasoning_summary_text.done",
+		"response.reasoning_text.done":
+		return t.handleContentDone()
+
+	case "response.output_item.done":
+		return t.handleOutputItemDone()
+
+	case "response.completed":
+		return t.handleCompleted(eventData)
+
+	case "response.failed":
+		return t.handleFailed()
+
+	default:
+		return nil
+	}
+}
+
+// handleCreated 处理 response.created → message_start
+func (t *anthropicStreamTranslator) handleCreated() []anthropicStreamEvent {
+	if t.messageStartSent {
+		return nil
+	}
+	t.messageStartSent = true
+	return []anthropicStreamEvent{{
+		Type: "message_start",
+		Message: &anthropicResponse{
+			ID:    t.responseID,
+			Type:  "message",
+			Role:  "assistant",
+			Model: t.model,
+			Usage: anthropicUsage{},
+		},
+	}}
+}
+
+// handleOutputItemAdded 处理新的输出项（reasoning/message/function_call）
+func (t *anthropicStreamTranslator) handleOutputItemAdded(data []byte) []anthropicStreamEvent {
+	var events []anthropicStreamEvent
+
+	// 确保 message_start 已发送
+	if !t.messageStartSent {
+		events = append(events, t.handleCreated()...)
+	}
+
+	itemType := gjson.GetBytes(data, "item.type").String()
+
+	switch itemType {
+	case "reasoning":
+		// 关闭当前块
+		events = append(events, t.closeCurrentBlock()...)
+		idx := t.contentBlockIndex
+		t.contentBlockIndex++
+		t.contentBlockOpen = true
+		t.currentBlockType = "thinking"
+		events = append(events, anthropicStreamEvent{
+			Type:  "content_block_start",
+			Index: &idx,
+			ContentBlock: &anthropicContentBlock{
+				Type:     "thinking",
+				Thinking: "",
+			},
+		})
+
+	case "function_call":
+		events = append(events, t.closeCurrentBlock()...)
+		callID := fromCodexCallID(gjson.GetBytes(data, "item.call_id").String())
+		name := gjson.GetBytes(data, "item.name").String()
+		idx := t.contentBlockIndex
+		t.contentBlockIndex++
+		t.contentBlockOpen = true
+		t.currentBlockType = "tool_use"
+		t.currentToolUseID = callID
+		t.currentToolUseName = name
+		t.hasToolUse = true
+		events = append(events, anthropicStreamEvent{
+			Type:  "content_block_start",
+			Index: &idx,
+			ContentBlock: &anthropicContentBlock{
+				Type:  "tool_use",
+				ID:    callID,
+				Name:  name,
+				Input: json.RawMessage("{}"),
+			},
+		})
+
+	case "message":
+		// text block 延迟到第一个 delta 时打开
+	}
+
+	return events
+}
+
+// handleTextDelta 处理文本增量
+func (t *anthropicStreamTranslator) handleTextDelta(data []byte) []anthropicStreamEvent {
+	delta := gjson.GetBytes(data, "delta").String()
+	if delta == "" {
+		return nil
+	}
+
+	var events []anthropicStreamEvent
+
+	// 确保 message_start 已发送
+	if !t.messageStartSent {
+		events = append(events, t.handleCreated()...)
+	}
+
+	// 懒开 text block
+	if !t.contentBlockOpen || t.currentBlockType != "text" {
+		events = append(events, t.closeCurrentBlock()...)
+		idx := t.contentBlockIndex
+		t.contentBlockIndex++
+		t.contentBlockOpen = true
+		t.currentBlockType = "text"
+		events = append(events, anthropicStreamEvent{
+			Type:  "content_block_start",
+			Index: &idx,
+			ContentBlock: &anthropicContentBlock{
+				Type: "text",
+				Text: "",
+			},
+		})
+	}
+
+	idx := t.contentBlockIndex - 1
+	events = append(events, anthropicStreamEvent{
+		Type:  "content_block_delta",
+		Index: &idx,
+		Delta: &anthropicDelta{
+			Type: "text_delta",
+			Text: delta,
+		},
+	})
+	return events
+}
+
+// handleThinkingDelta 处理推理增量
+func (t *anthropicStreamTranslator) handleThinkingDelta(data []byte) []anthropicStreamEvent {
+	delta := gjson.GetBytes(data, "delta").String()
+	if delta == "" {
+		return nil
+	}
+
+	var events []anthropicStreamEvent
+	if !t.messageStartSent {
+		events = append(events, t.handleCreated()...)
+	}
+
+	// 确保 thinking block 已打开
+	if !t.contentBlockOpen || t.currentBlockType != "thinking" {
+		events = append(events, t.closeCurrentBlock()...)
+		idx := t.contentBlockIndex
+		t.contentBlockIndex++
+		t.contentBlockOpen = true
+		t.currentBlockType = "thinking"
+		events = append(events, anthropicStreamEvent{
+			Type:  "content_block_start",
+			Index: &idx,
+			ContentBlock: &anthropicContentBlock{
+				Type:     "thinking",
+				Thinking: "",
+			},
+		})
+	}
+
+	idx := t.contentBlockIndex - 1
+	events = append(events, anthropicStreamEvent{
+		Type:  "content_block_delta",
+		Index: &idx,
+		Delta: &anthropicDelta{
+			Type:     "thinking_delta",
+			Thinking: delta,
+		},
+	})
+	return events
+}
+
+// handleToolInputDelta 处理工具调用参数增量
+func (t *anthropicStreamTranslator) handleToolInputDelta(data []byte) []anthropicStreamEvent {
+	delta := gjson.GetBytes(data, "delta").String()
+	if delta == "" {
+		return nil
+	}
+
+	idx := t.contentBlockIndex - 1
+	return []anthropicStreamEvent{{
+		Type:  "content_block_delta",
+		Index: &idx,
+		Delta: &anthropicDelta{
+			Type:        "input_json_delta",
+			PartialJSON: delta,
+		},
+	}}
+}
+
+// handleContentDone 处理内容完成（文本/推理块）
+func (t *anthropicStreamTranslator) handleContentDone() []anthropicStreamEvent {
+	return t.closeCurrentBlock()
+}
+
+// handleOutputItemDone 处理输出项完成
+func (t *anthropicStreamTranslator) handleOutputItemDone() []anthropicStreamEvent {
+	return t.closeCurrentBlock()
+}
+
+// handleCompleted 处理 response.completed → message_delta + message_stop
+func (t *anthropicStreamTranslator) handleCompleted(data []byte) []anthropicStreamEvent {
+	var events []anthropicStreamEvent
+
+	if !t.messageStartSent {
+		events = append(events, t.handleCreated()...)
+	}
+
+	events = append(events, t.closeCurrentBlock()...)
+
+	// 提取 usage
+	usage := gjson.GetBytes(data, "response.usage")
+	if usage.Exists() {
+		t.inputTokens = int(usage.Get("input_tokens").Int())
+		t.outputTokens = int(usage.Get("output_tokens").Int())
+		t.cachedTokens = int(usage.Get("input_tokens_details.cached_tokens").Int())
+	}
+
+	// 确定 stop_reason
+	stopReason := "end_turn"
+	status := gjson.GetBytes(data, "response.status").String()
+	if status == "incomplete" {
+		reason := gjson.GetBytes(data, "response.incomplete_details.reason").String()
+		if reason == "max_output_tokens" {
+			stopReason = "max_tokens"
+		}
+	}
+	if t.hasToolUse && stopReason == "end_turn" {
+		stopReason = "tool_use"
+	}
+
+	events = append(events, anthropicStreamEvent{
+		Type: "message_delta",
+		Delta: &anthropicDelta{
+			Type:       "message_delta",
+			StopReason: stopReason,
+		},
+		Usage: &anthropicUsage{
+			InputTokens:          t.inputTokens,
+			OutputTokens:         t.outputTokens,
+			CacheReadInputTokens: t.cachedTokens,
+		},
+	})
+
+	events = append(events, anthropicStreamEvent{Type: "message_stop"})
+	return events
+}
+
+// handleFailed 处理 response.failed
+func (t *anthropicStreamTranslator) handleFailed() []anthropicStreamEvent {
+	var events []anthropicStreamEvent
+	if !t.messageStartSent {
+		events = append(events, t.handleCreated()...)
+	}
+	events = append(events, t.closeCurrentBlock()...)
+	events = append(events, anthropicStreamEvent{
+		Type: "message_delta",
+		Delta: &anthropicDelta{
+			Type:       "message_delta",
+			StopReason: "end_turn",
+		},
+		Usage: &anthropicUsage{},
+	})
+	events = append(events, anthropicStreamEvent{Type: "message_stop"})
+	return events
+}
+
+// closeCurrentBlock 关闭当前打开的 content block
+func (t *anthropicStreamTranslator) closeCurrentBlock() []anthropicStreamEvent {
+	if !t.contentBlockOpen {
+		return nil
+	}
+	t.contentBlockOpen = false
+	idx := t.contentBlockIndex - 1
+	return []anthropicStreamEvent{{
+		Type:  "content_block_stop",
+		Index: &idx,
+	}}
+}
+
+// finalize 在流结束时补齐缺失的事件
+func (t *anthropicStreamTranslator) finalize() []anthropicStreamEvent {
+	var events []anthropicStreamEvent
+	if !t.messageStartSent {
+		events = append(events, t.handleCreated()...)
+	}
+	events = append(events, t.closeCurrentBlock()...)
+	events = append(events, anthropicStreamEvent{
+		Type: "message_delta",
+		Delta: &anthropicDelta{
+			Type:       "message_delta",
+			StopReason: "end_turn",
+		},
+		Usage: &anthropicUsage{
+			InputTokens:  t.inputTokens,
+			OutputTokens: t.outputTokens,
+		},
+	})
+	events = append(events, anthropicStreamEvent{Type: "message_stop"})
+	return events
+}
+
+// anthropicEventToSSE 将 Anthropic 事件序列化为 SSE 格式
+func anthropicEventToSSE(evt anthropicStreamEvent) string {
+	data, _ := json.Marshal(evt)
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", evt.Type, data)
+}
+
+// ==================== 非流式响应构建 ====================
+
+// buildAnthropicResponseFromCompleted 从 response.completed 事件构建完整的 Anthropic 响应
+func buildAnthropicResponseFromCompleted(completedData []byte, model string) *anthropicResponse {
+	responseID := "msg_" + uuid.New().String()[:24]
+
+	resp := &anthropicResponse{
+		ID:    responseID,
+		Type:  "message",
+		Role:  "assistant",
+		Model: model,
+	}
+
+	// 提取 output 数组
+	outputs := gjson.GetBytes(completedData, "response.output")
+	if !outputs.Exists() || !outputs.IsArray() {
+		return resp
+	}
+
+	var content []anthropicContentBlock
+	lastBlockIsToolUse := false
+
+	outputs.ForEach(func(_, item gjson.Result) bool {
+		itemType := item.Get("type").String()
+		switch itemType {
+		case "reasoning":
+			// reasoning → thinking block
+			summaryText := ""
+			item.Get("summary").ForEach(func(_, s gjson.Result) bool {
+				if s.Get("type").String() == "summary_text" {
+					summaryText += s.Get("text").String()
+				}
+				return true
+			})
+			if summaryText != "" {
+				content = append(content, anthropicContentBlock{
+					Type:     "thinking",
+					Thinking: summaryText,
+				})
+				lastBlockIsToolUse = false
+			}
+
+		case "message":
+			// message → text block(s)
+			item.Get("content").ForEach(func(_, part gjson.Result) bool {
+				if part.Get("type").String() == "output_text" {
+					text := part.Get("text").String()
+					if text != "" {
+						content = append(content, anthropicContentBlock{
+							Type: "text",
+							Text: text,
+						})
+						lastBlockIsToolUse = false
+					}
+				}
+				return true
+			})
+
+		case "function_call":
+			// function_call → tool_use block
+			callID := fromCodexCallID(item.Get("call_id").String())
+			name := item.Get("name").String()
+			args := item.Get("arguments").String()
+			if args == "" {
+				args = "{}"
+			}
+			content = append(content, anthropicContentBlock{
+				Type:  "tool_use",
+				ID:    callID,
+				Name:  name,
+				Input: json.RawMessage(args),
+			})
+			lastBlockIsToolUse = true
+		}
+		return true
+	})
+
+	resp.Content = content
+
+	// 确定 stop_reason
+	status := gjson.GetBytes(completedData, "response.status").String()
+	switch status {
+	case "incomplete":
+		reason := gjson.GetBytes(completedData, "response.incomplete_details.reason").String()
+		if reason == "max_output_tokens" {
+			resp.StopReason = "max_tokens"
+		} else {
+			resp.StopReason = "end_turn"
+		}
+	default:
+		if lastBlockIsToolUse {
+			resp.StopReason = "tool_use"
+		} else {
+			resp.StopReason = "end_turn"
+		}
+	}
+
+	// usage
+	usage := gjson.GetBytes(completedData, "response.usage")
+	if usage.Exists() {
+		resp.Usage = anthropicUsage{
+			InputTokens:          int(usage.Get("input_tokens").Int()),
+			OutputTokens:         int(usage.Get("output_tokens").Int()),
+			CacheReadInputTokens: int(usage.Get("input_tokens_details.cached_tokens").Int()),
+		}
+	}
+
+	return resp
+}

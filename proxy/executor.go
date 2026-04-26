@@ -365,23 +365,50 @@ func ExecuteRequestTraced(ctx context.Context, account *auth.Account, requestBod
 	return resp, trace, nil
 }
 
-// ResolveSessionID 从下游请求提取或生成 session ID
-// 优先级（参考 sub2api）：
-//  1. Header: session_id
-//  2. Header: conversation_id
-//  3. Body:   prompt_cache_key
-//  4. 基于 Bearer API Key 的确定性 UUID（参考 CLIProxyAPI）
-func ResolveSessionID(authHeader string, body []byte) string {
-	// 此函数由 handler 调用，将 gin.Context 的 header 传进来
+func requestAPIKeyFromHeaders(headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	authHeader := strings.TrimSpace(headers.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		if key := strings.TrimSpace(authHeader[7:]); key != "" {
+			return key
+		}
+	}
+	for _, header := range []string{"x-api-key", "anthropic-auth-token"} {
+		if key := strings.TrimSpace(headers.Get(header)); key != "" {
+			return key
+		}
+	}
+	return ""
+}
 
+// ResolveSessionID 从下游请求提取或生成 session ID
+// 优先级：
+//  1. Header: Session_id
+//  2. Header: Conversation_id
+//  3. Header: Idempotency-Key
+//  4. Body:   prompt_cache_key
+//  5. 基于 API Key 的确定性 UUID
+func ResolveSessionID(headers http.Header, body []byte) string {
+	if headers != nil {
+		if v := strings.TrimSpace(headers.Get("Session_id")); v != "" {
+			return v
+		}
+		if v := strings.TrimSpace(headers.Get("Conversation_id")); v != "" {
+			return v
+		}
+		if v := strings.TrimSpace(headers.Get("Idempotency-Key")); v != "" {
+			return v
+		}
+	}
 	// 优先从 body 的 prompt_cache_key 提取
 	if v := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); v != "" {
 		return v
 	}
 
 	// 基于下游用户的 API Key 生成确定性 cache key（参考 CLIProxyAPI codex_executor.go:621）
-	apiKey := strings.TrimPrefix(authHeader, "Bearer ")
-	apiKey = strings.TrimSpace(apiKey)
+	apiKey := requestAPIKeyFromHeaders(headers)
 	if apiKey != "" {
 		return uuid.NewSHA1(uuid.NameSpaceOID, []byte("codex2api:prompt-cache:"+apiKey)).String()
 	}

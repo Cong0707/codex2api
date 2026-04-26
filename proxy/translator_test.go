@@ -31,7 +31,7 @@ func TestResolveServiceTier(t *testing.T) {
 	}
 }
 
-func TestSanitizeServiceTierForUpstream_DropsFast(t *testing.T) {
+func TestSanitizeServiceTierForUpstream_FastToPriority(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-5.4",
 		"service_tier":"fast"
@@ -39,8 +39,8 @@ func TestSanitizeServiceTierForUpstream_DropsFast(t *testing.T) {
 
 	got := sanitizeServiceTierForUpstream(raw)
 
-	if gjson.GetBytes(got, "service_tier").Exists() {
-		t.Fatal("unsupported fast tier should not be forwarded upstream")
+	if tier := gjson.GetBytes(got, "service_tier").String(); tier != "priority" {
+		t.Fatalf("expected fast to map to priority, got %q", tier)
 	}
 }
 
@@ -65,6 +65,37 @@ func TestTranslateRequest_PreservesSupportedServiceTier(t *testing.T) {
 	}
 	if effort := gjson.GetBytes(got, "reasoning.effort").String(); effort != "high" {
 		t.Fatalf("reasoning.effort mismatch: got %q want %q", effort, "high")
+	}
+}
+
+func TestTranslateRequest_FillsMissingArrayItemsInToolSchema(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"messages":[{"role":"user","content":"test"}],
+		"tools":[
+			{
+				"type":"function",
+				"function":{
+					"name":"godot_mcp_node_signal",
+					"parameters":{
+						"type":"object",
+						"properties":{
+							"args":{"type":"array"}
+						}
+					}
+				}
+			}
+		]
+	}`)
+
+	got, err := TranslateRequest(raw)
+	if err != nil {
+		t.Fatalf("TranslateRequest returned error: %v", err)
+	}
+
+	items := gjson.GetBytes(got, "tools.0.parameters.properties.args.items")
+	if !items.Exists() || items.Type != gjson.JSON {
+		t.Fatalf("expected array schema items object to be injected, got %s", items.Raw)
 	}
 }
 

@@ -5,6 +5,7 @@ import "testing"
 func TestLoadDefaultsToPostgresAndRedis(t *testing.T) {
 	keys := []string{
 		"CODEX_PORT",
+		"CODEX_MAX_REQUEST_BODY_SIZE_MB",
 		"PORT",
 		"ADMIN_SECRET",
 		"DATABASE_DRIVER",
@@ -48,11 +49,15 @@ func TestLoadDefaultsToPostgresAndRedis(t *testing.T) {
 	if got := cfg.Port; got != 8080 {
 		t.Fatalf("Port = %d, want %d", got, 8080)
 	}
+	if got := cfg.MaxRequestBodySize; got != 32*1024*1024 {
+		t.Fatalf("MaxRequestBodySize = %d, want %d", got, 32*1024*1024)
+	}
 }
 
 func TestLoadAllowsExplicitSQLiteAndMemory(t *testing.T) {
 	keys := []string{
 		"CODEX_PORT",
+		"CODEX_MAX_REQUEST_BODY_SIZE_MB",
 		"PORT",
 		"ADMIN_SECRET",
 		"DATABASE_DRIVER",
@@ -95,6 +100,7 @@ func TestLoadAllowsExplicitSQLiteAndMemory(t *testing.T) {
 func TestLoadReadsAdminSecretFromEnv(t *testing.T) {
 	keys := []string{
 		"CODEX_PORT",
+		"CODEX_MAX_REQUEST_BODY_SIZE_MB",
 		"PORT",
 		"ADMIN_SECRET",
 		"DATABASE_DRIVER",
@@ -125,5 +131,42 @@ func TestLoadReadsAdminSecretFromEnv(t *testing.T) {
 
 	if got := cfg.AdminSecret; got != "from-env-secret" {
 		t.Fatalf("AdminSecret = %q, want %q", got, "from-env-secret")
+	}
+}
+
+func TestLoadReadsMaxRequestBodySizeFromEnv(t *testing.T) {
+	keys := []string{
+		"CODEX_PORT",
+		"CODEX_MAX_REQUEST_BODY_SIZE_MB",
+		"PORT",
+		"ADMIN_SECRET",
+		"DATABASE_DRIVER",
+		"DATABASE_PATH",
+		"DATABASE_HOST",
+		"DATABASE_PORT",
+		"DATABASE_USER",
+		"DATABASE_PASSWORD",
+		"DATABASE_NAME",
+		"DATABASE_SSLMODE",
+		"CACHE_DRIVER",
+		"REDIS_ADDR",
+		"REDIS_PASSWORD",
+		"REDIS_DB",
+	}
+	for _, key := range keys {
+		t.Setenv(key, "")
+	}
+
+	t.Setenv("DATABASE_HOST", "postgres")
+	t.Setenv("REDIS_ADDR", "redis:6379")
+	t.Setenv("CODEX_MAX_REQUEST_BODY_SIZE_MB", "64")
+
+	cfg, err := Load("__not_exists__.env")
+	if err != nil {
+		t.Fatalf("Load() 返回错误: %v", err)
+	}
+
+	if got := cfg.MaxRequestBodySize; got != 64*1024*1024 {
+		t.Fatalf("MaxRequestBodySize = %d, want %d", got, 64*1024*1024)
 	}
 }

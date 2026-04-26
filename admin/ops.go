@@ -202,6 +202,10 @@ func (h *Handler) GetOpsOverview(c *gin.Context) {
 
 	usedMemory, totalMemory, memoryPercent := readSystemMemory()
 	cpuPercent := h.cpuSampler.Sample()
+	var processMemory uint64
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	processMemory = memStats.Sys
 
 	var activeRequests int64
 	var totalRuntimeRequests int64
@@ -222,9 +226,10 @@ func (h *Handler) GetOpsOverview(c *gin.Context) {
 			Cores:   runtime.NumCPU(),
 		},
 		Memory: opsMemoryResponse{
-			Percent:    memoryPercent,
-			UsedBytes:  usedMemory,
-			TotalBytes: totalMemory,
+			Percent:      memoryPercent,
+			UsedBytes:    usedMemory,
+			TotalBytes:   totalMemory,
+			ProcessBytes: processMemory,
 		},
 		Runtime: opsRuntimeResponse{
 			Goroutines:        runtime.NumGoroutine(),

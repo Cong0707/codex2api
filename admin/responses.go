@@ -93,9 +93,10 @@ type opsCPUResponse struct {
 }
 
 type opsMemoryResponse struct {
-	Percent    float64 `json:"percent"`
-	UsedBytes  uint64  `json:"used_bytes"`
-	TotalBytes uint64  `json:"total_bytes"`
+	Percent      float64 `json:"percent"`
+	UsedBytes    uint64  `json:"used_bytes"`
+	TotalBytes   uint64  `json:"total_bytes"`
+	ProcessBytes uint64  `json:"process_bytes"`
 }
 
 type opsRuntimeResponse struct {

@@ -389,6 +389,7 @@
     "cpuCores": "{{count}} Cores",
     "memory": "Memory",
     "memoryUsage": "{{used}} / {{total}}",
+    "processMemory": "Process {{size}}",
     "postgres": "PostgreSQL",
     "pgConn": "Conn {{open}} / {{max}}",
     "redis": "Redis",

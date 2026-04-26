@@ -9,6 +9,8 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+const maxTools = 128
+
 // ==================== 请求翻译: OpenAI Chat Completions → Codex Responses ====================
 
 // TranslateRequest 将 OpenAI Chat Completions 请求转换为 Codex Responses 格式
@@ -106,7 +108,10 @@ func sanitizeServiceTierForUpstream(body []byte) []byte {
 	}
 
 	switch tier {
-	case "auto", "default", "flex", "priority", "scale":
+	case "auto", "default", "flex", "priority", "scale", "fast":
+		if tier == "fast" {
+			body, _ = sjson.SetBytes(body, "service_tier", "priority")
+		}
 		body, _ = sjson.DeleteBytes(body, "serviceTier")
 		return body
 	default:
@@ -307,6 +312,17 @@ func sanitizeToolSchemas(rawJSON []byte) []byte {
 	}
 
 	result := rawJSON
+	if toolCount := int(tools.Get("#").Int()); toolCount > maxTools {
+		result, _ = sjson.SetRawBytes(result, "tools", []byte(tools.Raw))
+		var rawTools []json.RawMessage
+		if err := json.Unmarshal([]byte(tools.Raw), &rawTools); err == nil && len(rawTools) > maxTools {
+			rawTools = rawTools[:maxTools]
+			if limited, err := json.Marshal(rawTools); err == nil {
+				result, _ = sjson.SetRawBytes(result, "tools", limited)
+			}
+		}
+	}
+	tools = gjson.GetBytes(result, "tools")
 	for i := 0; i < int(tools.Get("#").Int()); i++ {
 		params := gjson.GetBytes(result, fmt.Sprintf("tools.%d.parameters", i))
 		if !params.Exists() || params.Type != gjson.JSON {
@@ -318,7 +334,7 @@ func sanitizeToolSchemas(rawJSON []byte) []byte {
 			continue
 		}
 
-		stripUnsupportedSchemaKeys(schema)
+		sanitizeSchemaForUpstream(schema)
 
 		sanitized, err := json.Marshal(schema)
 		if err != nil {
@@ -394,6 +410,62 @@ func stripUnsupportedSchemaKeys(schema map[string]interface{}) {
 	}
 }
 
+func sanitizeSchemaForUpstream(schema map[string]interface{}) {
+	stripUnsupportedSchemaKeys(schema)
+	ensureArrayItems(schema)
+}
+
+func ensureArrayItems(schema map[string]interface{}) {
+	if schemaDeclaresArray(schema) {
+		if _, ok := schema["items"]; !ok {
+			schema["items"] = map[string]interface{}{}
+		}
+	}
+	if props, ok := schema["properties"].(map[string]interface{}); ok {
+		for _, v := range props {
+			if sub, ok := v.(map[string]interface{}); ok {
+				ensureArrayItems(sub)
+			}
+		}
+	}
+	if items, ok := schema["items"].(map[string]interface{}); ok {
+		ensureArrayItems(items)
+	}
+	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
+		if arr, ok := schema[key].([]interface{}); ok {
+			for _, item := range arr {
+				if sub, ok := item.(map[string]interface{}); ok {
+					ensureArrayItems(sub)
+				}
+			}
+		}
+	}
+	if addProps, ok := schema["additionalProperties"].(map[string]interface{}); ok {
+		ensureArrayItems(addProps)
+	}
+	if defs, ok := schema["$defs"].(map[string]interface{}); ok {
+		for _, v := range defs {
+			if sub, ok := v.(map[string]interface{}); ok {
+				ensureArrayItems(sub)
+			}
+		}
+	}
+}
+
+func schemaDeclaresArray(schema map[string]interface{}) bool {
+	switch t := schema["type"].(type) {
+	case string:
+		return t == "array"
+	case []interface{}:
+		for _, item := range t {
+			if s, ok := item.(string); ok && s == "array" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ==================== 响应翻译: Codex SSE → OpenAI SSE ====================
 
 // TranslateStreamChunk 将 Codex SSE 数据块翻译为 OpenAI Chat Completions 流式格式
@@ -461,6 +533,13 @@ type UsageInfo struct {
 // extractUsage 从 response.completed 事件提取 usage
 func extractUsage(eventData []byte) *UsageInfo {
 	usage := gjson.GetBytes(eventData, "response.usage")
+	if !usage.Exists() {
+		return nil
+	}
+	return extractUsageFromResult(usage)
+}
+
+func extractUsageFromResult(usage gjson.Result) *UsageInfo {
 	if !usage.Exists() {
 		return nil
 	}

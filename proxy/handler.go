@@ -451,9 +451,27 @@ func (h *Handler) accountMatcherForCurrentPort(c *gin.Context) auth.AccountMatch
 	}
 }
 
+func sessionAffinityKey(sessionID string, apiKey string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return sessionID
+	}
+	scope := uuid.NewSHA1(uuid.NameSpaceOID, []byte("codex2api:affinity:"+apiKey)).String()
+	return sessionID + "|" + scope
+}
+
 func (h *Handler) acquireAccountForRequest(c *gin.Context, exclude map[int64]bool) *auth.Account {
+	acc, _ := h.acquireAccountForRequestWithAffinity(c, "", exclude)
+	return acc
+}
+
+func (h *Handler) acquireAccountForRequestWithAffinity(c *gin.Context, affinityKey string, exclude map[int64]bool) (*auth.Account, string) {
 	if h == nil || h.store == nil {
-		return nil
+		return nil, ""
 	}
 	if exclude == nil {
 		exclude = make(map[int64]bool)
@@ -462,8 +480,8 @@ func (h *Handler) acquireAccountForRequest(c *gin.Context, exclude map[int64]boo
 	startedAt := requestStartTime(c)
 	waitRounds := 0
 
-	tryPick := func() *auth.Account {
-		return h.store.NextMatching(exclude, matcher)
+	tryPick := func() (*auth.Account, string) {
+		return h.store.NextForSession(affinityKey, exclude, matcher)
 	}
 
 	logSlowAcquire := func(acc *auth.Account) {
@@ -491,25 +509,25 @@ func (h *Handler) acquireAccountForRequest(c *gin.Context, exclude map[int64]boo
 		)
 	}
 
-	if acc := tryPick(); acc != nil {
+	if acc, proxyURL := tryPick(); acc != nil {
 		logSlowAcquire(acc)
-		return acc
+		return acc, proxyURL
 	}
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if c.Request.Context().Err() != nil || time.Now().After(deadline) {
-			return nil
+			return nil, ""
 		}
 		waitFor := time.Until(deadline)
 		if waitFor > 3*time.Second {
 			waitFor = 3 * time.Second
 		}
 		if waitFor <= 0 {
-			return nil
+			return nil, ""
 		}
 		waitRounds++
-		acc := h.store.WaitForAvailableMatching(c.Request.Context(), waitFor, exclude, matcher)
+		acc, proxyURL := h.store.WaitForSessionAvailable(c.Request.Context(), affinityKey, waitFor, exclude, matcher)
 		if acc == nil {
 			if c != nil {
 				c.Set("x-scheduler-acquire-ms", time.Since(startedAt).Milliseconds())
@@ -518,7 +536,7 @@ func (h *Handler) acquireAccountForRequest(c *gin.Context, exclude map[int64]boo
 			continue
 		}
 		logSlowAcquire(acc)
-		return acc
+		return acc, proxyURL
 	}
 }
 
@@ -529,6 +547,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		group.POST("/responses", h.Responses)
 		// 兼容部分客户端将 compact 请求打到 /responses/compact。
 		group.POST("/responses/compact", h.Responses)
+		group.POST("/messages", h.Messages)
 		group.GET("/models", h.ListModels)
 	}
 
@@ -542,6 +561,18 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	compat := r.Group("")
 	compat.Use(authMW)
 	registerOpenAIRoutes(compat)
+
+	codexDirect := r.Group("/backend-api/codex")
+	codexDirect.Use(authMW)
+	codexDirect.POST("/responses", h.Responses)
+	codexDirect.POST("/responses/*subpath", func(c *gin.Context) {
+		subpath := strings.TrimSpace(c.Param("subpath"))
+		if subpath == "/compact" || strings.HasPrefix(subpath, "/compact/") {
+			h.Responses(c)
+			return
+		}
+		h.Responses(c)
+	})
 }
 
 // authMiddleware API Key 鉴权中间件（增强版，带安全日志）
@@ -553,18 +584,14 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		key := requestAPIKeyFromHeaders(c.Request.Header)
+		if key == "" {
 			// Use standardized error format from api package
 			api.SendError(c, api.ErrMissingAPIKey)
 			c.Abort()
 			return
 		}
-
-		// 清理输入
-		authHeader = security.SanitizeInput(authHeader)
-
-		key := strings.TrimPrefix(authHeader, "Bearer ")
+		key = security.SanitizeInput(key)
 		if !h.isValidKey(key) {
 			// 记录安全审计日志（脱敏）
 			maskedKey := security.MaskAPIKey(key)
@@ -574,6 +601,7 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		c.Set("apiKey", key)
 		c.Next()
 	}
 }
@@ -769,7 +797,10 @@ func (h *Handler) Responses(c *gin.Context) {
 
 	rawBody = normalizeServiceTierField(rawBody)
 	isStream := gjson.GetBytes(rawBody, "stream").Bool()
-	sessionID := ResolveSessionID(c.GetHeader("Authorization"), rawBody)
+	downstreamHeaders := c.Request.Header.Clone()
+	apiKey := requestAPIKeyFromHeaders(downstreamHeaders)
+	sessionID := ResolveSessionID(downstreamHeaders, rawBody)
+	affinityKey := sessionAffinityKey(sessionID, apiKey)
 	reasoningEffort := extractReasoningEffort(rawBody)
 	serviceTier := extractServiceTier(rawBody)
 	if serviceTier != "" {
@@ -831,10 +862,14 @@ func (h *Handler) Responses(c *gin.Context) {
 	var failedAttempts []string
 	var upstreamStageMs int64
 	excludeAccounts := make(map[int64]bool) // 重试时排除已失败的账号
+	deviceCfg := h.deviceCfg
+	if deviceCfg == nil {
+		deviceCfg = DefaultDeviceProfileConfig()
+	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		acquireStartedAt := time.Now()
-		account := h.acquireAccountForRequest(c, excludeAccounts)
+		account, stickyProxyURL := h.acquireAccountForRequestWithAffinity(c, affinityKey, excludeAccounts)
 		attemptAcquireMs := int(time.Since(acquireStartedAt).Milliseconds())
 		if account == nil {
 			if lastStatusCode != 0 && len(lastBody) > 0 {
@@ -848,22 +883,12 @@ func (h *Handler) Responses(c *gin.Context) {
 		}
 
 		start := time.Now()
-		proxyURL := h.store.NextProxy()
+		proxyURL := strings.TrimSpace(stickyProxyURL)
+		if proxyURL == "" {
+			proxyURL = h.store.ResolveProxyForAccount(account)
+		}
 		useWebsocket := shouldUseWebsocketTransport(h.cfg, c.Request)
 		logRequestDispatch(c, "/v1/responses", attempt+1, account, proxyURL, model, reasoningEffort, attemptAcquireMs)
-
-		// 提取 API Key 用于设备指纹稳定化
-		apiKey := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-		apiKey = strings.TrimSpace(apiKey)
-
-		// 使用注入的设备指纹配置
-		deviceCfg := h.deviceCfg
-		if deviceCfg == nil {
-			deviceCfg = DefaultDeviceProfileConfig()
-		}
-
-		// 透传下游请求头用于指纹学习
-		downstreamHeaders := c.Request.Header.Clone()
 
 		resp, attemptTrace, reqErr := ExecuteRequestTraced(c.Request.Context(), account, codexBody, sessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
 		durationMs := int(time.Since(start).Milliseconds())
@@ -884,6 +909,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 			logUpstreamAttemptResult(c, "/v1/responses", attempt+1, account, proxyURL, 0, durationMs, requestStartedAt, reqErr.Error())
 			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 
 			// 不可重试的结构化错误直接返回
@@ -906,6 +932,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			resp.Body.Close()
 			logUpstreamAttemptResult(c, "/v1/responses", attempt+1, account, proxyURL, resp.StatusCode, durationMs, requestStartedAt, fmt.Sprintf("http_%d", resp.StatusCode))
 			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 
 			log.Printf("上游返回错误 (attempt %d, status %d): %s", attempt+1, resp.StatusCode, string(errBody))
@@ -1123,6 +1150,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			h.store.ReportRequestFailure(account, outcome.failureKind, time.Duration(attemptDuration)*time.Millisecond)
 			resp.Body.Close()
 			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 			lastErr = readErr
 			if lastErr == nil {
@@ -1130,6 +1158,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 			continue
 		}
+		h.store.BindSessionAffinity(affinityKey, account, proxyURL)
 		logStatusCode := outcome.logStatusCode
 		if outcome.logStatusCode != http.StatusOK {
 			log.Printf("流异常结束 (account %d, /v1/responses, status %d): %s，已转发约 %d 字符", account.ID(), outcome.logStatusCode, outcome.failureMessage, deltaCharCount)
@@ -1269,7 +1298,10 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	sessionID := ResolveSessionID(c.GetHeader("Authorization"), codexBody)
+	downstreamHeaders := c.Request.Header.Clone()
+	apiKey := requestAPIKeyFromHeaders(downstreamHeaders)
+	sessionID := ResolveSessionID(downstreamHeaders, codexBody)
+	affinityKey := sessionAffinityKey(sessionID, apiKey)
 
 	// 3. 带重试的上游请求
 	maxRetries := h.getMaxRetries()
@@ -1279,10 +1311,14 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	var failedAttempts []string
 	var upstreamStageMs int64
 	excludeAccounts := make(map[int64]bool) // 重试时排除已失败的账号
+	deviceCfg := h.deviceCfg
+	if deviceCfg == nil {
+		deviceCfg = DefaultDeviceProfileConfig()
+	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		acquireStartedAt := time.Now()
-		account := h.acquireAccountForRequest(c, excludeAccounts)
+		account, stickyProxyURL := h.acquireAccountForRequestWithAffinity(c, affinityKey, excludeAccounts)
 		attemptAcquireMs := int(time.Since(acquireStartedAt).Milliseconds())
 		if account == nil {
 			if lastStatusCode != 0 && len(lastBody) > 0 {
@@ -1296,22 +1332,12 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		}
 
 		start := time.Now()
-		proxyURL := h.store.NextProxy()
+		proxyURL := strings.TrimSpace(stickyProxyURL)
+		if proxyURL == "" {
+			proxyURL = h.store.ResolveProxyForAccount(account)
+		}
 		useWebsocket := shouldUseWebsocketTransport(h.cfg, c.Request)
 		logRequestDispatch(c, "/v1/chat/completions", attempt+1, account, proxyURL, model, reasoningEffort, attemptAcquireMs)
-
-		// 提取 API Key 用于设备指纹稳定化
-		apiKey := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-		apiKey = strings.TrimSpace(apiKey)
-
-		// 使用注入的设备指纹配置
-		deviceCfg := h.deviceCfg
-		if deviceCfg == nil {
-			deviceCfg = DefaultDeviceProfileConfig()
-		}
-
-		// 透传下游请求头用于指纹学习
-		downstreamHeaders := c.Request.Header.Clone()
 
 		resp, attemptTrace, reqErr := ExecuteRequestTraced(c.Request.Context(), account, codexBody, sessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
 		durationMs := int(time.Since(start).Milliseconds())
@@ -1332,6 +1358,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			}
 			logUpstreamAttemptResult(c, "/v1/chat/completions", attempt+1, account, proxyURL, 0, durationMs, requestStartedAt, reqErr.Error())
 			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 
 			// 不可重试的结构化错误直接返回
@@ -1354,6 +1381,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			resp.Body.Close()
 			logUpstreamAttemptResult(c, "/v1/chat/completions", attempt+1, account, proxyURL, resp.StatusCode, durationMs, requestStartedAt, fmt.Sprintf("http_%d", resp.StatusCode))
 			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 
 			log.Printf("上游返回错误 (attempt %d, status %d): %s", attempt+1, resp.StatusCode, string(errBody))
@@ -1633,6 +1661,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			h.store.ReportRequestFailure(account, outcome.failureKind, time.Duration(attemptDuration)*time.Millisecond)
 			resp.Body.Close()
 			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 			lastErr = readErr
 			if lastErr == nil {
@@ -1640,6 +1669,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			}
 			continue
 		}
+		h.store.BindSessionAffinity(affinityKey, account, proxyURL)
 		logStatusCode := outcome.logStatusCode
 		if outcome.logStatusCode != http.StatusOK {
 			log.Printf("流异常结束 (account %d, /v1/chat/completions, status %d): %s，已转发约 %d 字符", account.ID(), outcome.logStatusCode, outcome.failureMessage, deltaCharCount)

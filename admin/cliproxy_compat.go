@@ -764,7 +764,7 @@ func (h *Handler) validatePublicUploadedAccount(ctx context.Context, accountID i
 	defer cancel()
 	testModel := h.store.GetTestModel()
 	payload := buildTestPayload(testModel)
-	proxyURL := h.store.NextProxy()
+	proxyURL := h.store.ResolveProxyForAccount(account)
 	resp, reqErr := proxy.ExecuteRequest(testCtx, account, payload, "", proxyURL, "", nil, nil)
 	if reqErr != nil {
 		return fmt.Errorf("测试请求失败: %w", reqErr)
