@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -374,6 +375,483 @@ func buildImagesResponsesRequest(prompt string, images []string, toolJSON []byte
 		req, _ = sjson.SetRawBytes(req, "tools.-1", toolJSON)
 	}
 	return req
+}
+
+func normalizeChatCompletionMessageShorthandRequest(rawBody []byte) []byte {
+	if len(rawBody) == 0 || !json.Valid(rawBody) {
+		return rawBody
+	}
+	if gjson.GetBytes(rawBody, "messages").Exists() {
+		return rawBody
+	}
+
+	content := gjson.GetBytes(rawBody, "content")
+	if !content.Exists() {
+		return rawBody
+	}
+
+	role := strings.TrimSpace(gjson.GetBytes(rawBody, "role").String())
+	if role == "" {
+		role = "user"
+	}
+
+	message := []byte(`{}`)
+	message, _ = sjson.SetBytes(message, "role", role)
+	message, _ = sjson.SetRawBytes(message, "content", []byte(content.Raw))
+	for _, field := range []string{"name", "tool_call_id"} {
+		if value := gjson.GetBytes(rawBody, field); value.Exists() {
+			message, _ = sjson.SetRawBytes(message, field, []byte(value.Raw))
+		}
+	}
+	if toolCalls := gjson.GetBytes(rawBody, "tool_calls"); toolCalls.Exists() {
+		message, _ = sjson.SetRawBytes(message, "tool_calls", []byte(toolCalls.Raw))
+	}
+
+	normalized, err := sjson.SetRawBytes(rawBody, "messages", []byte("["+string(message)+"]"))
+	if err != nil {
+		return rawBody
+	}
+	for _, field := range []string{"role", "content", "name", "tool_call_id", "tool_calls"} {
+		normalized, _ = sjson.DeleteBytes(normalized, field)
+	}
+	return normalized
+}
+
+func extractPromptAndImagesFromChatMessages(messages gjson.Result) (string, []string, error) {
+	if !messages.Exists() || !messages.IsArray() {
+		return "", nil, fmt.Errorf("messages is required")
+	}
+
+	lines := make([]string, 0, len(messages.Array()))
+	images := make([]string, 0, 4)
+	messages.ForEach(func(_, msg gjson.Result) bool {
+		role := strings.ToLower(strings.TrimSpace(msg.Get("role").String()))
+		content := msg.Get("content")
+
+		texts := make([]string, 0, 4)
+		switch {
+		case content.Type == gjson.String:
+			if text := strings.TrimSpace(content.String()); text != "" {
+				texts = append(texts, text)
+			}
+		case content.IsArray():
+			content.ForEach(func(_, part gjson.Result) bool {
+				partType := strings.ToLower(strings.TrimSpace(part.Get("type").String()))
+				switch partType {
+				case "text", "input_text", "output_text":
+					if text := strings.TrimSpace(part.Get("text").String()); text != "" {
+						texts = append(texts, text)
+					}
+				case "image_url":
+					if imageURL := strings.TrimSpace(part.Get("image_url.url").String()); imageURL != "" {
+						images = append(images, imageURL)
+					}
+				case "input_image", "image":
+					imageURL := strings.TrimSpace(part.Get("image_url").String())
+					if imageURL == "" {
+						imageURL = strings.TrimSpace(part.Get("url").String())
+					}
+					if imageURL != "" {
+						images = append(images, imageURL)
+					}
+				}
+				return true
+			})
+		}
+
+		text := strings.TrimSpace(strings.Join(texts, "\n"))
+		if text == "" {
+			return true
+		}
+		label := "User"
+		switch role {
+		case "system":
+			label = "System"
+		case "developer":
+			label = "Developer"
+		case "assistant":
+			label = "Assistant"
+		case "tool":
+			label = "Tool"
+		}
+		lines = append(lines, label+": "+text)
+		return true
+	})
+
+	prompt := strings.TrimSpace(strings.Join(lines, "\n\n"))
+	if prompt == "" && len(images) > 0 {
+		prompt = "Edit the provided image."
+	}
+	if prompt == "" {
+		return "", images, fmt.Errorf("at least one text prompt is required")
+	}
+	return prompt, images, nil
+}
+
+func buildChatCompletionsImageTool(rawBody []byte, imageModel string, hasImages bool) []byte {
+	action := "generate"
+	if hasImages {
+		action = "edit"
+	}
+	tool := []byte(`{"type":"image_generation","action":"","model":""}`)
+	tool, _ = sjson.SetBytes(tool, "action", action)
+	tool, _ = sjson.SetBytes(tool, "model", imageModel)
+
+	stringFields := []string{"size", "quality", "background", "output_format", "moderation", "style"}
+	if hasImages {
+		stringFields = append(stringFields, "input_fidelity")
+	}
+	for _, field := range stringFields {
+		if value := strings.TrimSpace(gjson.GetBytes(rawBody, field).String()); value != "" {
+			tool, _ = sjson.SetBytes(tool, field, value)
+		}
+	}
+	for _, field := range []string{"output_compression", "partial_images"} {
+		if value := gjson.GetBytes(rawBody, field); value.Exists() && value.Type == gjson.Number {
+			tool, _ = sjson.SetBytes(tool, field, value.Int())
+		}
+	}
+	if hasImages {
+		if maskURL := strings.TrimSpace(gjson.GetBytes(rawBody, "mask.image_url").String()); maskURL != "" {
+			tool, _ = sjson.SetBytes(tool, "input_image_mask.image_url", maskURL)
+		}
+	}
+	return tool
+}
+
+func buildChatCompletionsImageResponsesRequest(rawBody []byte, imageModel string) ([]byte, error) {
+	rawBody = normalizeServiceTierField(rawBody)
+	prompt, images, err := extractPromptAndImagesFromChatMessages(gjson.GetBytes(rawBody, "messages"))
+	if err != nil {
+		return nil, err
+	}
+
+	tool := buildChatCompletionsImageTool(rawBody, imageModel, len(images) > 0)
+	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
+
+	if reasoning := gjson.GetBytes(rawBody, "reasoning.effort"); reasoning.Exists() && strings.TrimSpace(reasoning.String()) != "" {
+		responsesBody, _ = sjson.SetBytes(responsesBody, "reasoning.effort", reasoning.String())
+	} else if reasoning := gjson.GetBytes(rawBody, "reasoning_effort"); reasoning.Exists() && strings.TrimSpace(reasoning.String()) != "" {
+		responsesBody, _ = sjson.SetBytes(responsesBody, "reasoning.effort", reasoning.String())
+	}
+	if serviceTier := extractServiceTier(rawBody); serviceTier != "" {
+		responsesBody, _ = sjson.SetBytes(responsesBody, "service_tier", serviceTier)
+	}
+	return sanitizeServiceTierForUpstream(responsesBody), nil
+}
+
+func renderChatMarkdownFromImagePayload(payload []byte) (string, error) {
+	data := gjson.GetBytes(payload, "data")
+	if !data.Exists() || !data.IsArray() || len(data.Array()) == 0 {
+		return "", fmt.Errorf("image payload is empty")
+	}
+
+	mimeType := mimeTypeFromOutputFormat(gjson.GetBytes(payload, "output_format").String())
+	parts := make([]string, 0, len(data.Array()))
+	for idx, item := range data.Array() {
+		imageURL := strings.TrimSpace(item.Get("url").String())
+		if imageURL == "" {
+			b64 := strings.TrimSpace(item.Get("b64_json").String())
+			if b64 == "" {
+				continue
+			}
+			imageURL = "data:" + mimeType + ";base64," + b64
+		}
+		parts = append(parts, fmt.Sprintf("![image_%d](%s)", idx+1, imageURL))
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("image payload does not contain usable images")
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+func buildChatCompletionsImageResponse(imagePayload []byte, model, chunkID string, created int64, usage *UsageInfo) ([]byte, error) {
+	content, err := renderChatMarkdownFromImagePayload(imagePayload)
+	if err != nil {
+		return nil, err
+	}
+	if created <= 0 {
+		created = time.Now().Unix()
+	}
+
+	result := []byte(`{}`)
+	result, _ = sjson.SetBytes(result, "id", chunkID)
+	result, _ = sjson.SetBytes(result, "object", "chat.completion")
+	result, _ = sjson.SetBytes(result, "created", created)
+	result, _ = sjson.SetBytes(result, "model", model)
+	result, _ = sjson.SetBytes(result, "choices.0.index", 0)
+	result, _ = sjson.SetBytes(result, "choices.0.message.role", "assistant")
+	result, _ = sjson.SetBytes(result, "choices.0.message.content", content)
+	result, _ = sjson.SetBytes(result, "choices.0.finish_reason", "stop")
+
+	if usage == nil {
+		usage = extractUsageFromResult(gjson.GetBytes(imagePayload, "usage"))
+	}
+	if usage != nil {
+		result, _ = sjson.SetBytes(result, "usage.prompt_tokens", usage.PromptTokens)
+		result, _ = sjson.SetBytes(result, "usage.completion_tokens", usage.CompletionTokens)
+		result, _ = sjson.SetBytes(result, "usage.total_tokens", usage.TotalTokens)
+	}
+	return result, nil
+}
+
+func writeChatCompletionsImageStream(c *gin.Context, model, chunkID string, created int64, imagePayload []byte, usage *UsageInfo) (int, error) {
+	content, err := renderChatMarkdownFromImagePayload(imagePayload)
+	if err != nil {
+		return 0, err
+	}
+	if created <= 0 {
+		created = time.Now().Unix()
+	}
+	if usage == nil {
+		usage = extractUsageFromResult(gjson.GetBytes(imagePayload, "usage"))
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		return 0, fmt.Errorf("streaming not supported")
+	}
+
+	if _, err := fmt.Fprint(c.Writer, ": keep-alive\n\n"); err != nil {
+		return 0, err
+	}
+	flusher.Flush()
+
+	firstTokenMs := int(time.Since(requestStartTime(c)).Milliseconds())
+
+	roleChunk := buildOpenAIChunk(chunkID, model, "", "", "")
+	roleChunk, _ = sjson.SetBytes(roleChunk, "created", created)
+	roleChunk, _ = sjson.SetBytes(roleChunk, "choices.0.delta.role", "assistant")
+	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", roleChunk); err != nil {
+		return 0, err
+	}
+	flusher.Flush()
+
+	contentChunk := buildOpenAIChunk(chunkID, model, content, "", "")
+	contentChunk, _ = sjson.SetBytes(contentChunk, "created", created)
+	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", contentChunk); err != nil {
+		return 0, err
+	}
+	flusher.Flush()
+
+	finalChunk := buildOpenAIFinalChunk(chunkID, model, usage)
+	finalChunk, _ = sjson.SetBytes(finalChunk, "created", created)
+	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", finalChunk); err != nil {
+		return 0, err
+	}
+	if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
+		return 0, err
+	}
+	flusher.Flush()
+	return firstTokenMs, nil
+}
+
+func (h *Handler) handleChatCompletionsImageFallback(c *gin.Context, rawBody []byte, model string) {
+	rawBody = normalizeServiceTierField(rawBody)
+	isStream := gjson.GetBytes(rawBody, "stream").Bool()
+	reasoningEffort := extractReasoningEffort(rawBody)
+	serviceTier := extractServiceTier(rawBody)
+	if serviceTier != "" {
+		c.Set("x-service-tier", serviceTier)
+	}
+	logRequestLifecycleStart(c, "/v1/chat/completions", model, isStream, reasoningEffort)
+
+	responsesBody, err := buildChatCompletionsImageResponsesRequest(rawBody, model)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": "Invalid request: " + err.Error(), "type": "invalid_request_error"},
+		})
+		return
+	}
+
+	requestStartedAt := requestStartTime(c)
+	apiKey := requestAPIKeyFromHeaders(c.Request.Header)
+	sessionID := ResolveSessionID(c.Request.Header, responsesBody)
+	affinityKey := sessionAffinityKey(sessionID, apiKey)
+	maxRetries := h.getMaxRetries()
+	var lastErr error
+	var lastStatusCode int
+	var lastBody []byte
+	excludeAccounts := make(map[int64]bool)
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		attemptAcquireStartedAt := time.Now()
+		account, stickyProxyURL := h.acquireAccountForRequestWithAffinity(c, affinityKey, excludeAccounts)
+		attemptAcquireMs := int(time.Since(attemptAcquireStartedAt).Milliseconds())
+		if account == nil {
+			if lastStatusCode != 0 && len(lastBody) > 0 {
+				h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+				return
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{"message": "无可用账号，请稍后重试", "type": "server_error"},
+			})
+			return
+		}
+
+		start := time.Now()
+		proxyURL := strings.TrimSpace(stickyProxyURL)
+		if proxyURL == "" {
+			proxyURL = h.store.ResolveProxyForAccount(account)
+		}
+		deviceCfg := h.deviceCfg
+		if deviceCfg == nil {
+			deviceCfg = &DeviceProfileConfig{StabilizeDeviceProfile: false}
+		}
+		downstreamHeaders := c.Request.Header.Clone()
+		useWebsocket := shouldUseWebsocketTransport(h.cfg, c.Request)
+		logRequestDispatch(c, "/v1/chat/completions", attempt+1, account, proxyURL, model, reasoningEffort, attemptAcquireMs)
+
+		resp, attemptTrace, reqErr := ExecuteRequestTraced(c.Request.Context(), account, responsesBody, sessionID, proxyURL, apiKey, deviceCfg, downstreamHeaders, useWebsocket)
+		durationMs := int(time.Since(start).Milliseconds())
+		statusCode := 0
+		if resp != nil {
+			statusCode = resp.StatusCode
+		}
+		if attemptTrace != nil && !attemptTrace.HeaderAt.IsZero() {
+			logUpstreamAttemptHeaders(c, "/v1/chat/completions", attempt+1, account, statusCode, attemptTrace, requestStartedAt)
+		}
+		if reqErr != nil {
+			if kind := classifyTransportFailure(reqErr); kind != "" {
+				h.store.ReportRequestFailure(account, kind, time.Duration(durationMs)*time.Millisecond)
+			}
+			logUpstreamAttemptResult(c, "/v1/chat/completions", attempt+1, account, proxyURL, 0, durationMs, requestStartedAt, reqErr.Error())
+			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
+			excludeAccounts[account.ID()] = true
+			if !IsRetryableError(reqErr) && classifyTransportFailure(reqErr) == "" {
+				ErrorToGinResponse(c, reqErr)
+				return
+			}
+			lastErr = reqErr
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			errBody, _ := io.ReadAll(resp.Body)
+			if kind := classifyHTTPFailure(resp.StatusCode, errBody); kind != "" {
+				h.store.ReportRequestFailure(account, kind, time.Duration(durationMs)*time.Millisecond)
+			}
+			h.persistUsageAndSettleFromResponse(account, resp)
+			resp.Body.Close()
+			logUpstreamAttemptResult(c, "/v1/chat/completions", attempt+1, account, proxyURL, resp.StatusCode, durationMs, requestStartedAt, fmt.Sprintf("http_%d", resp.StatusCode))
+			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
+			excludeAccounts[account.ID()] = true
+			h.applyCooldown(account, resp.StatusCode, errBody, resp)
+			lastStatusCode = resp.StatusCode
+			lastBody = errBody
+			if isRetryableStatus(resp.StatusCode, errBody) && attempt < maxRetries {
+				continue
+			}
+			h.sendFinalUpstreamError(c, resp.StatusCode, errBody)
+			return
+		}
+
+		h.store.BindSessionAffinity(affinityKey, account, proxyURL)
+		account.Mu().RLock()
+		c.Set("x-account-email", account.Email)
+		account.Mu().RUnlock()
+		c.Set("x-account-proxy", proxyURL)
+		c.Set("x-model", model)
+		c.Set("x-reasoning-effort", reasoningEffort)
+
+		imagePayload, usage, imageCount, readErr := collectImagesResponse(resp.Body, "b64_json", model)
+		logStatusCode := http.StatusOK
+		firstTokenMs := 0
+		if readErr != nil {
+			logStatusCode = http.StatusBadGateway
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": gin.H{"message": readErr.Error(), "type": "upstream_error"},
+			})
+		} else {
+			chunkID := "chatcmpl-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+			created := gjson.GetBytes(imagePayload, "created").Int()
+			if isStream {
+				firstTokenMs, readErr = writeChatCompletionsImageStream(c, model, chunkID, created, imagePayload, usage)
+				if readErr != nil {
+					logStatusCode = http.StatusBadGateway
+				}
+			} else {
+				var out []byte
+				out, readErr = buildChatCompletionsImageResponse(imagePayload, model, chunkID, created, usage)
+				if readErr != nil {
+					logStatusCode = http.StatusBadGateway
+					c.JSON(http.StatusBadGateway, gin.H{
+						"error": gin.H{"message": readErr.Error(), "type": "upstream_error"},
+					})
+				} else {
+					c.Data(http.StatusOK, "application/json", out)
+				}
+			}
+		}
+
+		if readErr != nil && isStream {
+			log.Printf("chat 图像兜底流写入失败: %v", readErr)
+		}
+
+		totalDurationMs := int(time.Since(requestStartedAt).Milliseconds())
+		c.Set("x-first-token-ms", firstTokenMs)
+		resolvedServiceTier := resolveServiceTier("", serviceTier)
+		c.Set("x-service-tier", resolvedServiceTier)
+		logInput := &database.UsageLogInput{
+			AccountID:        account.ID(),
+			Endpoint:         "/v1/chat/completions",
+			Model:            model,
+			StatusCode:       logStatusCode,
+			DurationMs:       totalDurationMs,
+			FirstTokenMs:     firstTokenMs,
+			ReasoningEffort:  reasoningEffort,
+			InboundEndpoint:  "/v1/chat/completions",
+			UpstreamEndpoint: "/v1/responses",
+			Stream:           isStream,
+			ServiceTier:      resolvedServiceTier,
+		}
+		if usage != nil {
+			logInput.PromptTokens = usage.PromptTokens
+			logInput.CompletionTokens = usage.CompletionTokens
+			logInput.TotalTokens = usage.TotalTokens
+			logInput.InputTokens = usage.InputTokens
+			logInput.OutputTokens = usage.OutputTokens
+			logInput.ReasoningTokens = usage.ReasoningTokens
+			logInput.CachedTokens = usage.CachedTokens
+		}
+		if imageCount > 0 && logInput.CompletionTokens == 0 {
+			logInput.CompletionTokens = imageCount
+			logInput.OutputTokens = imageCount
+			logInput.TotalTokens = logInput.PromptTokens + imageCount
+		}
+		h.logUsageForRequest(c, logInput)
+
+		failureDetail := ""
+		if readErr != nil {
+			failureDetail = readErr.Error()
+		}
+		logUpstreamAttemptResult(c, "/v1/chat/completions", attempt+1, account, proxyURL, logStatusCode, durationMs, requestStartedAt, failureDetail)
+		h.persistUsageAndSettleFromResponse(account, resp)
+		resp.Body.Close()
+		if readErr != nil {
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
+			h.store.ReportRequestFailure(account, "transport", time.Duration(logInput.DurationMs)*time.Millisecond)
+		} else {
+			h.store.ReportRequestSuccess(account, time.Duration(logInput.DurationMs)*time.Millisecond)
+		}
+		h.store.Release(account)
+		return
+	}
+
+	if lastErr != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{"message": "上游请求失败: " + lastErr.Error(), "type": "upstream_error"},
+		})
+	} else if lastStatusCode != 0 {
+		h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+	}
 }
 
 func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestModel string, responsesBody []byte, responseFormat, streamPrefix string, stream bool) {

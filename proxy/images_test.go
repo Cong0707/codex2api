@@ -68,3 +68,106 @@ func TestCollectImagesResponseBuildsOpenAIImagePayload(t *testing.T) {
 		t.Fatalf("usage.images = %d, want 1", got)
 	}
 }
+
+func TestNormalizeChatCompletionMessageShorthandRequest(t *testing.T) {
+	raw := []byte(`{"model":"gpt-image-2","role":"user","content":[{"type":"text","text":"改成水彩画风"}]}`)
+
+	normalized := normalizeChatCompletionMessageShorthandRequest(raw)
+
+	if !gjson.GetBytes(normalized, "messages").Exists() {
+		t.Fatalf("messages not created: %s", string(normalized))
+	}
+	if got := gjson.GetBytes(normalized, "messages.0.role").String(); got != "user" {
+		t.Fatalf("messages.0.role = %q, want user", got)
+	}
+	if got := gjson.GetBytes(normalized, "messages.0.content.0.text").String(); got != "改成水彩画风" {
+		t.Fatalf("messages.0.content.0.text = %q", got)
+	}
+	if gjson.GetBytes(normalized, "role").Exists() || gjson.GetBytes(normalized, "content").Exists() {
+		t.Fatalf("top-level shorthand fields should be removed: %s", string(normalized))
+	}
+}
+
+func TestBuildChatCompletionsImageResponsesRequestGenerate(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-image-2",
+		"messages":[
+			{"role":"system","content":"你是一个画图助手"},
+			{"role":"user","content":[{"type":"text","text":"画一只猫"}]}
+		],
+		"size":"1024x1024",
+		"reasoning_effort":"xhigh",
+		"service_tier":"priority"
+	}`)
+
+	body, err := buildChatCompletionsImageResponsesRequest(raw, "gpt-image-2")
+	if err != nil {
+		t.Fatalf("buildChatCompletionsImageResponsesRequest returned error: %v", err)
+	}
+	if got := gjson.GetBytes(body, "tools.0.action").String(); got != "generate" {
+		t.Fatalf("tools.0.action = %q, want generate", got)
+	}
+	if got := gjson.GetBytes(body, "tools.0.model").String(); got != "gpt-image-2" {
+		t.Fatalf("tools.0.model = %q, want gpt-image-2", got)
+	}
+	if got := gjson.GetBytes(body, "tools.0.size").String(); got != "1024x1024" {
+		t.Fatalf("tools.0.size = %q", got)
+	}
+	if got := gjson.GetBytes(body, "reasoning.effort").String(); got != "xhigh" {
+		t.Fatalf("reasoning.effort = %q, want xhigh", got)
+	}
+	if got := gjson.GetBytes(body, "service_tier").String(); got != "priority" {
+		t.Fatalf("service_tier = %q, want priority", got)
+	}
+	if got := gjson.GetBytes(body, "input.0.content.0.text").String(); !strings.Contains(got, "画一只猫") {
+		t.Fatalf("prompt = %q, want contains 画一只猫", got)
+	}
+}
+
+func TestBuildChatCompletionsImageResponsesRequestEdit(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-image-2",
+		"messages":[
+			{
+				"role":"user",
+				"content":[
+					{"type":"text","text":"改成水彩画风"},
+					{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}
+				]
+			}
+		]
+	}`)
+
+	body, err := buildChatCompletionsImageResponsesRequest(raw, "gpt-image-2")
+	if err != nil {
+		t.Fatalf("buildChatCompletionsImageResponsesRequest returned error: %v", err)
+	}
+	if got := gjson.GetBytes(body, "tools.0.action").String(); got != "edit" {
+		t.Fatalf("tools.0.action = %q, want edit", got)
+	}
+	if got := gjson.GetBytes(body, "input.0.content.1.image_url").String(); got != "data:image/png;base64,aGVsbG8=" {
+		t.Fatalf("input.0.content.1.image_url = %q", got)
+	}
+}
+
+func TestBuildChatCompletionsImageResponse(t *testing.T) {
+	payload := []byte(`{
+		"created":1714000000,
+		"output_format":"png",
+		"data":[{"b64_json":"aGVsbG8="}]
+	}`)
+
+	out, err := buildChatCompletionsImageResponse(payload, "gpt-image-2", "chatcmpl-test", 1714000000, nil)
+	if err != nil {
+		t.Fatalf("buildChatCompletionsImageResponse returned error: %v", err)
+	}
+	if got := gjson.GetBytes(out, "object").String(); got != "chat.completion" {
+		t.Fatalf("object = %q, want chat.completion", got)
+	}
+	if got := gjson.GetBytes(out, "choices.0.message.role").String(); got != "assistant" {
+		t.Fatalf("choices.0.message.role = %q, want assistant", got)
+	}
+	if got := gjson.GetBytes(out, "choices.0.message.content").String(); got != "![image_1](data:image/png;base64,aGVsbG8=)" {
+		t.Fatalf("choices.0.message.content = %q", got)
+	}
+}

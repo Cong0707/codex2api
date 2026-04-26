@@ -1507,6 +1507,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidRequest, "Failed to read request body", api.ErrorTypeInvalidRequest))
 		return
 	}
+	rawBody = normalizeChatCompletionMessageShorthandRequest(rawBody)
 
 	// Validate request
 	validator := api.NewValidator(rawBody)
@@ -1540,7 +1541,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		return
 	}
 	if isImageOnlyModel(model) {
-		sendImageOnlyModelError(c, model)
+		h.handleChatCompletionsImageFallback(c, rawBody, model)
 		return
 	}
 
