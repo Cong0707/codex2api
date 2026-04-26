@@ -68,6 +68,27 @@ func parseDBTimeString(value string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("无法解析时间值: %q", value)
 }
 
+func sqliteTimeParam(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format("2006-01-02 15:04:05")
+}
+
+func (db *DB) timeRangeArgs(start, end time.Time) (interface{}, interface{}) {
+	if db != nil && db.isSQLite() {
+		return sqliteTimeParam(start), sqliteTimeParam(end)
+	}
+	return start, end
+}
+
+func (db *DB) timeArg(value time.Time) interface{} {
+	if db != nil && db.isSQLite() {
+		return sqliteTimeParam(value)
+	}
+	return value
+}
+
 func decodeCredentials(raw interface{}) map[string]interface{} {
 	data := bytesFromDBValue(raw)
 	if len(data) == 0 {

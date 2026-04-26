@@ -1162,7 +1162,8 @@ func (db *DB) GetUsageStats(ctx context.Context) (*UsageStats, error) {
 	`
 
 	var todayErrors int64
-	err := db.conn.QueryRowContext(ctx, todayQuery, todayStart, minuteAgo).Scan(
+	todayStartArg, minuteAgoArg := db.timeRangeArgs(todayStart, minuteAgo)
+	err := db.conn.QueryRowContext(ctx, todayQuery, todayStartArg, minuteAgoArg).Scan(
 		&stats.TodayRequests, &stats.TodayTokens, &stats.TotalPrompt, &stats.TotalCompletion, &stats.TotalCachedTokens,
 		&stats.RPM, &stats.TPM,
 		&stats.AvgDurationMs,
@@ -1376,7 +1377,8 @@ func (db *DB) GetChartAggregation(ctx context.Context, start, end time.Time, buc
 	GROUP BY 1
 	ORDER BY 1`
 
-	rows, err := db.conn.QueryContext(ctx, timelineQuery, start, end, bucketMinutes)
+	startArg, endArg := db.timeRangeArgs(start, end)
+	rows, err := db.conn.QueryContext(ctx, timelineQuery, startArg, endArg, bucketMinutes)
 	if err != nil {
 		return nil, err
 	}
@@ -1406,7 +1408,7 @@ func (db *DB) GetChartAggregation(ctx context.Context, start, end time.Time, buc
 	ORDER BY 2 DESC
 	LIMIT 10`
 
-	mRows, err := db.conn.QueryContext(ctx, modelQuery, start, end)
+	mRows, err := db.conn.QueryContext(ctx, modelQuery, startArg, endArg)
 	if err != nil {
 		return nil, err
 	}
@@ -1491,7 +1493,8 @@ func (db *DB) ListUsageLogsByTimeRange(ctx context.Context, start, end time.Time
 	           WHERE u.created_at >= $1 AND u.created_at <= $2
 	             AND u.status_code <> 499
 	           ORDER BY u.created_at ASC`
-	rows, err := db.conn.QueryContext(ctx, query, start, end)
+	startArg, endArg := db.timeRangeArgs(start, end)
+	rows, err := db.conn.QueryContext(ctx, query, startArg, endArg)
 	if err != nil {
 		return nil, err
 	}
@@ -1548,7 +1551,8 @@ func (db *DB) ListUsageLogsByTimeRangePaged(ctx context.Context, f UsageLogFilte
 
 	// 动态拼接 WHERE 条件
 	where := `u.created_at >= $1 AND u.created_at <= $2 AND u.status_code <> 499`
-	args := []interface{}{f.Start, f.End}
+	startArg, endArg := db.timeRangeArgs(f.Start, f.End)
+	args := []interface{}{startArg, endArg}
 	paramIdx := 3
 
 	if f.Email != "" {
@@ -1974,6 +1978,8 @@ func (db *DB) GetAccountByID(ctx context.Context, id int64) (*AccountRow, error)
 		FROM accounts a
 		LEFT JOIN public_account_settlements s ON s.account_id = a.id
 		WHERE a.id = $1
+		  AND a.status <> 'deleted'
+		  AND COALESCE(a.error_message, '') <> 'deleted'
 		LIMIT 1
 	`
 
@@ -2001,7 +2007,7 @@ func (db *DB) GetAccountByID(ctx context.Context, id int64) (*AccountRow, error)
 		&updatedAtRaw,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
+			return nil, sql.ErrNoRows
 		}
 		return nil, fmt.Errorf("查询账号失败: %w", err)
 	}
@@ -2360,7 +2366,8 @@ func (db *DB) GetAccountEventTrend(ctx context.Context, start, end time.Time, bu
 	GROUP BY 1
 	ORDER BY 1`
 
-	rows, err := db.conn.QueryContext(ctx, query, start, end, bucketMinutes)
+	startArg, endArg := db.timeRangeArgs(start, end)
+	rows, err := db.conn.QueryContext(ctx, query, startArg, endArg, bucketMinutes)
 	if err != nil {
 		return nil, err
 	}

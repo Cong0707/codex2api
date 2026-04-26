@@ -841,6 +841,7 @@ type Store struct {
 	plusPortAccessFree        atomic.Bool
 	preferredPlanType         atomic.Value // string: free/plus/pro/team/enterprise 或空
 	preferredPlanBonus        int64        // 指定套餐额外调度加分
+	modelMapping              atomic.Value // string: {"anthropic_model":"codex_model", ...}
 	maxRetries                int64        // 请求失败最大重试次数（换号重试）
 	publicInitialCreditX1e4   int64        // 公开上传账号初始入账金额（美元，放大 1e4）
 	publicFullCreditX1e4      int64        // 公开上传账号满额度总金额（美元，放大 1e4）
@@ -993,6 +994,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	s.plusPortAccessFree.Store(settings.PlusPortAccessFree)
 	s.preferredPlanType.Store(normalizePreferredPlanType(settings.SchedulerPreferredPlan))
 	atomic.StoreInt64(&s.preferredPlanBonus, int64(clampPreferredPlanBonus(settings.SchedulerPlanBonus)))
+	s.modelMapping.Store(settings.ModelMapping)
 	retries := int64(settings.MaxRetries)
 	if retries <= 0 {
 		retries = 2 // 默认重试 2 次
