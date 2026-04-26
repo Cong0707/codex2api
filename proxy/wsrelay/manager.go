@@ -40,6 +40,9 @@ type WsConnection struct {
 	// 连接 URL
 	URL string
 
+	// 连接池键
+	PoolKey string
+
 	// 连接状态
 	state atomic.Int32
 
@@ -92,7 +95,10 @@ func (wc *WsConnection) Close() error {
 		if wc.onDisconnected != nil && wc.session != nil {
 			wc.onDisconnected(wc.session.AccountID)
 		}
-		return wc.conn.Close()
+		if wc.conn != nil {
+			return wc.conn.Close()
+		}
+		return nil
 	}
 	return nil
 }
@@ -157,6 +163,12 @@ type Manager struct {
 
 	// 读写锁保护回调设置
 	mu sync.RWMutex
+
+	// pool key 级别串行化，避免同一逻辑 session 并发复用同一条连接
+	keyLocks sync.Map
+
+	// 可选的探活函数（测试替换）
+	probeFunc func(wc *WsConnection) bool
 }
 
 // NewManager 创建连接池管理器
@@ -179,6 +191,19 @@ func NewManager() *Manager {
 	go m.cleanupLoop()
 
 	return m
+}
+
+func effectiveProxyURL(account *auth.Account, proxyOverride string) string {
+	proxyURL := ""
+	if account != nil {
+		account.Mu().RLock()
+		proxyURL = account.ProxyURL
+		account.Mu().RUnlock()
+	}
+	if strings.TrimSpace(proxyOverride) != "" {
+		proxyURL = proxyOverride
+	}
+	return strings.TrimSpace(proxyURL)
 }
 
 func applyProxyToWebsocketDialer(dialer *websocket.Dialer, rawProxy string) error {
@@ -241,13 +266,17 @@ func (m *Manager) cleanupLoop() {
 	}
 }
 
-// evictExpired 清理过期连接和会话
+// evictExpired 清理过期连接、会话和对应 key 锁
 func (m *Manager) evictExpired() {
+	activeKeys := make(map[string]struct{})
+
 	m.connections.Range(func(key, value any) bool {
 		wc := value.(*WsConnection)
 		if wc.IsExpired() || !wc.IsConnected() {
 			m.connections.Delete(key)
 			wc.Close()
+		} else if sk, ok := key.(string); ok {
+			activeKeys[sk] = struct{}{}
 		}
 		return true
 	})
@@ -257,6 +286,17 @@ func (m *Manager) evictExpired() {
 		if s.IsExpired() || !s.IsConnected() {
 			m.sessions.Delete(key)
 			s.Close()
+		} else if sk, ok := key.(string); ok {
+			activeKeys[sk] = struct{}{}
+		}
+		return true
+	})
+
+	m.keyLocks.Range(func(key, _ any) bool {
+		if sk, ok := key.(string); ok {
+			if _, alive := activeKeys[sk]; !alive {
+				m.keyLocks.Delete(key)
+			}
 		}
 		return true
 	})
@@ -313,38 +353,110 @@ func (m *Manager) getOnConnected() func(accountID int64, session *Session) {
 	return m.onConnected
 }
 
+func (m *Manager) keyLock(key string) *sync.Mutex {
+	if v, ok := m.keyLocks.Load(key); ok {
+		return v.(*sync.Mutex)
+	}
+	mu := &sync.Mutex{}
+	if actual, loaded := m.keyLocks.LoadOrStore(key, mu); loaded {
+		return actual.(*sync.Mutex)
+	}
+	return mu
+}
+
 // AcquireConnection 获取或创建连接
-// 注意：WebSocket 连接不支持并发读取，因此始终创建新连接而非复用
+// 仅在同一逻辑 session 且连接空闲时复用，避免不同会话/代理复用同一条连接。
 func (m *Manager) AcquireConnection(
 	ctx context.Context,
 	account *auth.Account,
 	wsURL string,
+	sessionKey string,
 	headers http.Header,
 	proxyOverride string,
-) (*WsConnection, error) {
-	key := m.poolKey(account.ID(), wsURL)
+) (*WsConnection, *PendingRequest, error) {
+	key := m.poolKey(account.ID(), wsURL, sessionKey, effectiveProxyURL(account, proxyOverride))
+	lock := m.keyLock(key)
+	wait := 10 * time.Millisecond
 
-	// 清理可能存在的旧连接（避免泄漏）
-	if v, ok := m.connections.LoadAndDelete(key); ok {
-		wc := v.(*WsConnection)
-		wc.Close()
+	for {
+		lock.Lock()
+		if v, ok := m.connections.Load(key); ok {
+			wc := v.(*WsConnection)
+			if canReuseConnection(wc) {
+				if m.probe(wc) {
+					pr := wc.session.AddPendingRequest(sessionKey)
+					wc.Touch()
+					lock.Unlock()
+					return wc, pr, nil
+				}
+				m.connections.Delete(key)
+				m.sessions.Delete(key)
+				m.keyLocks.Delete(key)
+				wc.Close()
+				lock.Unlock()
+				lock = m.keyLock(key)
+				continue
+			}
+			if wc.IsConnected() && !wc.IsExpired() && wc.session != nil {
+				lock.Unlock()
+				select {
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				case <-time.After(wait):
+				}
+				continue
+			}
+			m.connections.Delete(key)
+			m.sessions.Delete(key)
+			wc.Close()
+		}
+
+		wc, err := m.createConnection(ctx, account, wsURL, sessionKey, headers, proxyOverride)
+		if err != nil {
+			lock.Unlock()
+			return nil, nil, err
+		}
+
+		m.connections.Store(key, wc)
+		pr := wc.session.AddPendingRequest(sessionKey)
+		lock.Unlock()
+
+		if fn := m.getOnConnected(); fn != nil {
+			fn(account.ID(), wc.session)
+		}
+		return wc, pr, nil
 	}
+}
 
-	// 始终创建新连接，避免多个请求复用同一个 websocket.Conn 导致并发读取
-	wc, err := m.createConnection(ctx, account, wsURL, headers, proxyOverride)
-	if err != nil {
-		return nil, err
+func canReuseConnection(wc *WsConnection) bool {
+	if wc == nil {
+		return false
 	}
-
-	// 存储新连接
-	m.connections.Store(key, wc)
-
-	// 调用连接回调
-	if fn := m.getOnConnected(); fn != nil {
-		fn(account.ID(), wc.session)
+	if !wc.IsConnected() || wc.IsExpired() || wc.session == nil {
+		return false
 	}
+	return wc.session.PendingCount() == 0
+}
 
-	return wc, nil
+func probeConnection(wc *WsConnection) bool {
+	wc.writeMu.Lock()
+	defer wc.writeMu.Unlock()
+
+	if !wc.IsConnected() || wc.conn == nil {
+		return false
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	return wc.conn.WriteControl(websocket.PingMessage, []byte{}, deadline) == nil
+}
+
+func (m *Manager) probe(wc *WsConnection) bool {
+	m.mu.RLock()
+	fn := m.probeFunc
+	m.mu.RUnlock()
+	if fn != nil {
+		return fn(wc)
+	}
+	return probeConnection(wc)
 }
 
 // createConnection 创建新 WebSocket 连接
@@ -352,6 +464,7 @@ func (m *Manager) createConnection(
 	ctx context.Context,
 	account *auth.Account,
 	wsURL string,
+	sessionKey string,
 	headers http.Header,
 	proxyOverride string,
 ) (*WsConnection, error) {
@@ -364,13 +477,7 @@ func (m *Manager) createConnection(
 	}
 
 	// 配置代理
-	account.Mu().RLock()
-	proxyURL := account.ProxyURL
-	account.Mu().RUnlock()
-
-	if proxyOverride != "" {
-		proxyURL = proxyOverride
-	}
+	proxyURL := effectiveProxyURL(account, proxyOverride)
 
 	if proxyURL != "" {
 		if err := applyProxyToWebsocketDialer(dialer, proxyURL); err != nil {
@@ -379,24 +486,28 @@ func (m *Manager) createConnection(
 	}
 
 	// 创建会话（先关闭旧 session 避免泄漏）
-	sessionKey := m.poolKey(account.ID(), wsURL)
-	if oldSessionVal, ok := m.sessions.Load(sessionKey); ok {
+	poolKey := m.poolKey(account.ID(), wsURL, sessionKey, proxyURL)
+	if oldSessionVal, ok := m.sessions.Load(poolKey); ok {
 		oldSession := oldSessionVal.(*Session)
 		oldSession.Close()
 	}
 	session := NewSession(account.ID(), m)
-	m.sessions.Store(sessionKey, session)
+	if trimmed := strings.TrimSpace(sessionKey); trimmed != "" {
+		session.ID = trimmed
+	}
+	m.sessions.Store(poolKey, session)
 
 	// 拨号连接
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
-		m.sessions.Delete(sessionKey)
+		m.sessions.Delete(poolKey)
 		session.Close()
 		return nil, fmt.Errorf("websocket handshake failed: %w", err)
 	}
 
 	// 创建连接包装
 	wc := NewWsConnection(conn, session, wsURL)
+	wc.PoolKey = poolKey
 	wc.httpResp = resp
 	wc.onDisconnected = m.getOnDisconnected()
 	session.SetConnected(true)
@@ -420,23 +531,24 @@ func (m *Manager) ReleaseConnection(wc *WsConnection) {
 }
 
 // RemoveConnection 移除连接
-func (m *Manager) RemoveConnection(accountID int64, wsURL string) {
-	key := m.poolKey(accountID, wsURL)
+func (m *Manager) RemoveConnection(accountID int64, wsURL string, sessionKey string, proxyURL string) {
+	key := m.poolKey(accountID, wsURL, sessionKey, proxyURL)
 	if v, ok := m.connections.LoadAndDelete(key); ok {
 		wc := v.(*WsConnection)
 		wc.Close()
 	}
 	m.sessions.Delete(key)
+	m.keyLocks.Delete(key)
 }
 
 // poolKey 生成连接池键
-func (m *Manager) poolKey(accountID int64, wsURL string) string {
-	return fmt.Sprintf("%d|%s", accountID, wsURL)
+func (m *Manager) poolKey(accountID int64, wsURL string, sessionKey string, proxyURL string) string {
+	return fmt.Sprintf("%d|%s|%s|%s", accountID, wsURL, strings.TrimSpace(sessionKey), strings.TrimSpace(proxyURL))
 }
 
 // GetSession 获取会话
-func (m *Manager) GetSession(accountID int64, wsURL string) (*Session, bool) {
-	if v, ok := m.sessions.Load(m.poolKey(accountID, wsURL)); ok {
+func (m *Manager) GetSession(accountID int64, wsURL string, sessionKey string, proxyURL string) (*Session, bool) {
+	if v, ok := m.sessions.Load(m.poolKey(accountID, wsURL, sessionKey, proxyURL)); ok {
 		return v.(*Session), true
 	}
 	return nil, false
@@ -467,14 +579,15 @@ func (m *Manager) ReplaceConnection(
 	ctx context.Context,
 	account *auth.Account,
 	wsURL string,
+	sessionKey string,
 	headers http.Header,
 	proxyOverride string,
-) (*WsConnection, error) {
+) (*WsConnection, *PendingRequest, error) {
 	// 先移除旧连接
-	m.RemoveConnection(account.ID(), wsURL)
+	m.RemoveConnection(account.ID(), wsURL, sessionKey, effectiveProxyURL(account, proxyOverride))
 
 	// 创建新连接
-	return m.AcquireConnection(ctx, account, wsURL, headers, proxyOverride)
+	return m.AcquireConnection(ctx, account, wsURL, sessionKey, headers, proxyOverride)
 }
 
 // SendHeartbeat 发送心跳 Ping
@@ -491,7 +604,10 @@ func (m *Manager) SendHeartbeat(wc *WsConnection) error {
 	if err != nil {
 		log.Printf("WebSocket Ping 失败 (account %d): %v", wc.session.AccountID, err)
 		wc.Close()
-		m.connections.Delete(m.poolKey(wc.session.AccountID, wc.URL))
+		if wc.PoolKey != "" {
+			m.connections.Delete(wc.PoolKey)
+			m.sessions.Delete(wc.PoolKey)
+		}
 		return err
 	}
 	return nil

@@ -90,6 +90,25 @@ func TestSessionAddAndRemovePendingRequest(t *testing.T) {
 	}
 }
 
+func TestSessionPendingCount(t *testing.T) {
+	session := NewSession(12345, nil)
+	if got := session.PendingCount(); got != 0 {
+		t.Fatalf("PendingCount() = %d, want 0", got)
+	}
+
+	pr1 := session.AddPendingRequest("a")
+	pr2 := session.AddPendingRequest("b")
+	if got := session.PendingCount(); got != 2 {
+		t.Fatalf("PendingCount() = %d, want 2", got)
+	}
+
+	session.RemovePendingRequest(pr1.RequestID)
+	if got := session.PendingCount(); got != 1 {
+		t.Fatalf("PendingCount() = %d, want 1", got)
+	}
+	session.RemovePendingRequest(pr2.RequestID)
+}
+
 // TestSessionExpiration 测试会话过期判断
 func TestSessionExpiration(t *testing.T) {
 	session := NewSession(12345, nil)

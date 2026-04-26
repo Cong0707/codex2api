@@ -40,6 +40,7 @@ type DeviceProfileConfig struct {
 	OS                     string
 	Arch                   string
 	StabilizeDeviceProfile bool
+	BetaFeatures           string
 }
 
 // DefaultDeviceProfileConfig 返回默认设备指纹配置。

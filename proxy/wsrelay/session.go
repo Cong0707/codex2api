@@ -190,6 +190,19 @@ func (s *Session) RemovePendingRequest(requestID string) {
 	}
 }
 
+// PendingCount returns the number of in-flight requests bound to this session.
+func (s *Session) PendingCount() int {
+	if s == nil {
+		return 0
+	}
+	count := 0
+	s.pending.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
 // DeliverResponse 投递响应到等待请求
 func (s *Session) DeliverResponse(msg *Message) bool {
 	if pr, ok := s.GetPendingRequest(msg.RequestID); ok {

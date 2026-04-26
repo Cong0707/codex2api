@@ -177,6 +177,9 @@ func main() {
 	if raw, ok := os.LookupEnv("STABILIZE_DEVICE_PROFILE"); ok {
 		deviceCfg.StabilizeDeviceProfile = strings.EqualFold(strings.TrimSpace(raw), "true")
 	}
+	if raw, ok := os.LookupEnv("CODEX_BETA_FEATURES"); ok {
+		deviceCfg.BetaFeatures = strings.TrimSpace(raw)
+	}
 	handler := proxy.NewHandler(store, db, cfg, deviceCfg)
 
 	// 注册 WebSocket 执行函数（避免 proxy ↔ wsrelay 循环依赖）

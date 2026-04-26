@@ -86,29 +86,25 @@ func (e *Executor) ExecuteRequestViaWebsocket(
 	}
 
 	// 准备请求头
-	headers := e.prepareWebsocketHeaders(accessToken, account, accountIDStr, apiKey, deviceCfg, downstreamHeaders)
+	headers := e.prepareWebsocketHeaders(accessToken, account, accountIDStr, sessionID, apiKey, deviceCfg, downstreamHeaders)
 
 	// 获取或创建连接
-	wc, err := e.manager.AcquireConnection(ctx, account, wsURL, headers, proxyOverride)
+	wc, pr, err := e.manager.AcquireConnection(ctx, account, wsURL, sessionID, headers, proxyOverride)
 	if err != nil {
 		return nil, err
 	}
-
-	// 创建请求
-	pr := wc.session.AddPendingRequest(sessionID)
 
 	// 发送请求
 	if err := e.sendRequest(wc, wsBody, pr.RequestID); err != nil {
 		// 发送失败，尝试重连一次
 		wc.session.RemovePendingRequest(pr.RequestID)
-		e.manager.RemoveConnection(account.ID(), wsURL)
+		e.manager.RemoveConnection(account.ID(), wsURL, sessionID, effectiveProxyURL(account, proxyOverride))
 
-		wc, err = e.manager.AcquireConnection(ctx, account, wsURL, headers, proxyOverride)
+		wc, pr, err = e.manager.AcquireConnection(ctx, account, wsURL, sessionID, headers, proxyOverride)
 		if err != nil {
 			return nil, err
 		}
 
-		pr = wc.session.AddPendingRequest(sessionID)
 		if err := e.sendRequest(wc, wsBody, pr.RequestID); err != nil {
 			wc.session.RemovePendingRequest(pr.RequestID)
 			e.manager.ReleaseConnection(wc)
@@ -184,6 +180,7 @@ func (e *Executor) prepareWebsocketHeaders(
 	accessToken string,
 	account *auth.Account,
 	accountID string,
+	sessionID string,
 	apiKey string,
 	deviceCfg *proxy.DeviceProfileConfig,
 	downstreamHeaders http.Header,
@@ -225,6 +222,14 @@ func (e *Executor) prepareWebsocketHeaders(
 	// Account ID
 	if accountID != "" {
 		headers.Set("Chatgpt-Account-Id", accountID)
+	}
+	if sessionID := strings.TrimSpace(sessionID); sessionID != "" {
+		headers.Set("Conversation_id", sessionID)
+	}
+	if beta := strings.TrimSpace(downstreamHeaders.Get("X-Codex-Beta-Features")); beta != "" {
+		headers.Set("X-Codex-Beta-Features", beta)
+	} else if deviceCfg != nil && strings.TrimSpace(deviceCfg.BetaFeatures) != "" {
+		headers.Set("X-Codex-Beta-Features", strings.TrimSpace(deviceCfg.BetaFeatures))
 	}
 
 	return headers
