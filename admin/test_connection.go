@@ -63,7 +63,13 @@ func (h *Handler) TestConnection(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	testModel := h.store.GetTestModel()
+	testModel := strings.TrimSpace(c.Query("model"))
+	if testModel == "" {
+		testModel = h.connectionTestModel(c.Request.Context())
+	} else if !proxy.IsTextTestModelID(c.Request.Context(), h.db, testModel) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不支持的测试模型: " + testModel})
+		return
+	}
 
 	// 发送 test_start
 	sendTestEvent(c, testEvent{Type: "test_start", Model: testModel})
@@ -169,6 +175,18 @@ func buildTestPayload(model string) []byte {
 	payload, _ = sjson.SetBytes(payload, "store", false)
 	payload, _ = sjson.SetBytes(payload, "instructions", "You are a helpful assistant. Reply briefly.")
 	return payload
+}
+
+func (h *Handler) connectionTestModel(ctx context.Context) string {
+	model := strings.TrimSpace(h.store.GetTestModel())
+	if proxy.IsTextTestModelID(ctx, h.db, model) {
+		return model
+	}
+	models := proxy.TextTestModelIDs(ctx, h.db)
+	if len(models) > 0 {
+		return models[0]
+	}
+	return "gpt-5.4"
 }
 
 // sendTestEvent 发送 SSE 事件

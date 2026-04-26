@@ -672,7 +672,20 @@
     "publicRedeemDesc": "Redeem codes with public key balance",
     "publicUploadDesc": "One-way account JSON upload with public key",
     "createFailed": "Create failed",
-    "deleteFailed": "Delete failed"
+    "deleteFailed": "Delete failed",
+    "modelsEnabled": "Enabled Models",
+    "modelsLastSynced": "Last Synced",
+    "modelsNeverSynced": "Never synced",
+    "syncUpstreamModels": "Sync Upstream Models",
+    "modelsSyncing": "Syncing...",
+    "modelsSyncSuccess": "Model sync complete: {{added}} added, {{updated}} updated, {{skipped}} skipped",
+    "modelsSyncFailed": "Model sync failed",
+    "modelSourceBuiltin": "Built-in",
+    "modelSourceOfficial": "Official",
+    "modelProOnly": "Pro",
+    "modelImage": "Image",
+    "imageGenerationsDesc": "Image generation endpoint",
+    "imageEditsDesc": "Image editing endpoint"
   },
   "proxies": {
     "description": "Manage proxy pool with round-robin distribution to accounts",

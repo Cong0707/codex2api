@@ -385,6 +385,23 @@ func (db *DB) migrate(ctx context.Context) error {
 	END
 	WHERE COALESCE(auto_clean_full_usage_mode, '') = '';
 
+	CREATE TABLE IF NOT EXISTS model_registry (
+		id                     VARCHAR(100) PRIMARY KEY,
+		enabled                BOOLEAN DEFAULT TRUE,
+		category               VARCHAR(50) DEFAULT 'codex',
+		source                 VARCHAR(50) DEFAULT 'manual',
+		pro_only               BOOLEAN DEFAULT FALSE,
+		api_key_auth_available BOOLEAN DEFAULT TRUE,
+		last_seen_at           TIMESTAMPTZ NULL,
+		updated_at             TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS model_registry_sync (
+		id             INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+		source_url     TEXT DEFAULT '',
+		last_synced_at TIMESTAMPTZ NULL
+	);
+
 	CREATE TABLE IF NOT EXISTS proxies (
 		id         SERIAL PRIMARY KEY,
 		url        VARCHAR(500) NOT NULL UNIQUE,

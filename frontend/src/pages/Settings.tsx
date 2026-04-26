@@ -10,7 +10,7 @@ import ToastNotice from '../components/ToastNotice'
 import { useDataLoader } from '../hooks/useDataLoader'
 import { useConfirmDialog } from '../hooks/useConfirmDialog'
 import { useToast } from '../hooks/useToast'
-import type { APIKeyRow, HealthResponse, RedeemCodeSummary, SystemSettings } from '../types'
+import type { APIKeyRow, HealthResponse, ModelInfo, RedeemCodeSummary, SystemSettings } from '../types'
 import { getErrorMessage } from '../utils/error'
 import { formatRelativeTime } from '../utils/time'
 import { Card, CardContent } from '@/components/ui/card'
@@ -103,6 +103,10 @@ export default function Settings() {
   const [savingSettings, setSavingSettings] = useState(false)
   const [loadedAdminSecret, setLoadedAdminSecret] = useState('')
   const [modelList, setModelList] = useState<string[]>([])
+  const [modelItems, setModelItems] = useState<ModelInfo[]>([])
+  const [modelsLastSyncedAt, setModelsLastSyncedAt] = useState<string | undefined>()
+  const [modelsSourceURL, setModelsSourceURL] = useState('')
+  const [syncingModels, setSyncingModels] = useState(false)
   const { toast, showToast } = useToast()
   const { confirm, confirmDialog } = useConfirmDialog()
 
@@ -130,6 +134,9 @@ export default function Settings() {
     })
     setLoadedAdminSecret(settings.admin_secret ?? '')
     setModelList(modelsResp.models ?? [])
+    setModelItems(modelsResp.items ?? [])
+    setModelsLastSyncedAt(modelsResp.last_synced_at)
+    setModelsSourceURL(modelsResp.source_url ?? '')
     return {
       health,
       keys: keysResponse.keys ?? [],
@@ -321,6 +328,28 @@ export default function Settings() {
     }
   }
 
+  const handleSyncModels = async () => {
+    setSyncingModels(true)
+    try {
+      const result = await api.syncModels()
+      setModelList(result.models ?? [])
+      setModelItems(result.items ?? [])
+      setModelsLastSyncedAt(result.last_synced_at)
+      setModelsSourceURL(result.source_url ?? '')
+      showToast(
+        t('settings.modelsSyncSuccess', {
+          added: result.added,
+          updated: result.updated,
+          skipped: result.skipped?.length ?? 0,
+        }),
+      )
+    } catch (error) {
+      showToast(`${t('settings.modelsSyncFailed')}: ${getErrorMessage(error)}`, 'error')
+    } finally {
+      setSyncingModels(false)
+    }
+  }
+
   const { health, keys, pubKeys, redeemSummaries } = data
   const publicKeysTotalPages = Math.max(1, Math.ceil(pubKeys.length / PUBLIC_KEYS_PAGE_SIZE))
   const publicKeysSafePage = Math.min(publicKeysPage, publicKeysTotalPages)
@@ -343,6 +372,24 @@ export default function Settings() {
     { label: 'Team', value: 'team' },
     { label: 'Enterprise', value: 'enterprise' },
   ]
+  const visibleModelItems = modelItems.length > 0
+    ? modelItems
+    : modelList.map((id) => ({
+        id,
+        enabled: true,
+        category: id.includes('image') ? 'image' : 'codex',
+        source: 'builtin',
+        pro_only: id === 'gpt-5.3-codex-spark' || id === 'gpt-5.5-pro',
+        api_key_auth_available: id !== 'gpt-5.5',
+      }))
+  const textModelOptions = visibleModelItems
+    .filter((model) => model.enabled && model.category !== 'image' && !model.id.includes('image'))
+    .map((model) => ({ label: model.id, value: model.id }))
+  const enabledModelCount = visibleModelItems.filter((model) => model.enabled).length
+  const modelsLastSyncedLabel = modelsLastSyncedAt
+    ? formatRelativeTime(modelsLastSyncedAt, { variant: 'compact' })
+    : t('settings.modelsNeverSynced')
+  const modelsSourceLabel = modelsSourceURL || 'https://developers.openai.com/codex/models'
 
   return (
     <StateShell
@@ -741,7 +788,7 @@ export default function Settings() {
                 <Select
                   value={settingsForm.test_model}
                   onValueChange={(value) => setSettingsForm((f) => ({ ...f, test_model: value }))}
-                  options={modelList.map((model) => ({ label: model, value: model }))}
+                  options={textModelOptions}
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.testModelHint')}</p>
               </div>
@@ -1013,6 +1060,46 @@ export default function Settings() {
           </CardContent>
         </Card>
 
+        <Card className="mb-4">
+          <CardContent className="p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-foreground">{t('settings.syncUpstreamModels')}</h3>
+                <p className="text-sm text-muted-foreground mt-1 break-all">{modelsSourceLabel}</p>
+              </div>
+              <Button variant="outline" onClick={() => void handleSyncModels()} disabled={syncingModels}>
+                {syncingModels ? t('settings.modelsSyncing') : t('settings.syncUpstreamModels')}
+              </Button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 mb-4">
+              <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
+                <div className="text-xs text-muted-foreground mb-1">{t('settings.modelsEnabled')}</div>
+                <div className="text-lg font-semibold text-foreground">{enabledModelCount}</div>
+              </div>
+              <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
+                <div className="text-xs text-muted-foreground mb-1">{t('settings.modelsLastSynced')}</div>
+                <div className="text-sm font-semibold text-foreground">{modelsLastSyncedLabel}</div>
+              </div>
+              <div className="rounded-xl border border-border bg-muted/20 px-4 py-3">
+                <div className="text-xs text-muted-foreground mb-1">{t('settings.modelList')}</div>
+                <div className="text-sm font-semibold text-foreground">{visibleModelItems.length}</div>
+              </div>
+            </div>
+            <div className="flex max-h-[220px] flex-wrap gap-2 overflow-auto rounded-xl border border-border bg-muted/10 p-3">
+              {visibleModelItems.map((model) => (
+                <div key={model.id} className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5">
+                  <span className="font-mono text-xs font-semibold text-foreground">{model.id}</span>
+                  <Badge variant={model.source === 'official_codex_docs' ? 'default' : 'secondary'} className="text-[11px]">
+                    {model.source === 'official_codex_docs' ? t('settings.modelSourceOfficial') : t('settings.modelSourceBuiltin')}
+                  </Badge>
+                  {model.pro_only ? <Badge variant="outline" className="text-[11px]">{t('settings.modelProOnly')}</Badge> : null}
+                  {model.category === 'image' ? <Badge variant="outline" className="text-[11px]">{t('settings.modelImage')}</Badge> : null}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
         {/* API Endpoints */}
         <Card>
           <CardContent className="p-6">
@@ -1041,6 +1128,16 @@ export default function Settings() {
                     <TableCell><Badge variant="secondary" className="text-[13px]">GET</Badge></TableCell>
                     <TableCell className="font-mono text-[20px]">/v1/models</TableCell>
                     <TableCell className="text-[14px] text-muted-foreground">{t('settings.modelList')}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell><Badge variant="default" className="text-[13px]">POST</Badge></TableCell>
+                    <TableCell className="font-mono text-[20px]">/v1/images/generations</TableCell>
+                    <TableCell className="text-[14px] text-muted-foreground">{t('settings.imageGenerationsDesc')}</TableCell>
+                  </TableRow>
+                  <TableRow>
+                    <TableCell><Badge variant="default" className="text-[13px]">POST</Badge></TableCell>
+                    <TableCell className="font-mono text-[20px]">/v1/images/edits</TableCell>
+                    <TableCell className="text-[14px] text-muted-foreground">{t('settings.imageEditsDesc')}</TableCell>
                   </TableRow>
                   <TableRow>
                     <TableCell><Badge variant="default" className="text-[13px]">POST</Badge></TableCell>

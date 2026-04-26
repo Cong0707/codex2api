@@ -128,6 +128,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/settings", h.GetSettings)
 	api.PUT("/settings", h.UpdateSettings)
 	api.GET("/models", h.ListModels)
+	api.POST("/models/sync", h.SyncModels)
 	api.GET("/proxies", h.ListProxies)
 	api.POST("/proxies", h.AddProxies)
 	api.DELETE("/proxies/:id", h.DeleteProxy)
@@ -3219,7 +3220,21 @@ func (h *Handler) importCompatAccountsCommon(c *gin.Context, items []compatImpor
 
 // ListModels 返回支持的模型列表（供前端设置页使用）
 func (h *Handler) ListModels(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"models": proxy.SupportedModels})
+	catalog, _ := proxy.ListModelCatalog(c.Request.Context(), h.db)
+	c.JSON(http.StatusOK, catalog)
+}
+
+// SyncModels 从官方 Codex 模型页同步模型注册表。
+func (h *Handler) SyncModels(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	result, err := proxy.SyncOfficialCodexModels(ctx, h.db)
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 // ==================== 账号趋势 ====================

@@ -672,7 +672,20 @@
     "publicRedeemDesc": "使用公开密钥按余额兑换兑换码",
     "publicUploadDesc": "公开密钥单向上传账号 JSON",
     "createFailed": "创建失败",
-    "deleteFailed": "删除失败"
+    "deleteFailed": "删除失败",
+    "modelsEnabled": "启用模型",
+    "modelsLastSynced": "最近同步",
+    "modelsNeverSynced": "未同步",
+    "syncUpstreamModels": "同步上游模型",
+    "modelsSyncing": "同步中...",
+    "modelsSyncSuccess": "模型同步完成：新增 {{added}}，更新 {{updated}}，跳过 {{skipped}}",
+    "modelsSyncFailed": "模型同步失败",
+    "modelSourceBuiltin": "内置",
+    "modelSourceOfficial": "官方同步",
+    "modelProOnly": "Pro",
+    "modelImage": "图像",
+    "imageGenerationsDesc": "图像生成接口",
+    "imageEditsDesc": "图像编辑接口"
   },
   "proxies": {
     "description": "管理代理池，支持轮询分配给账号使用",

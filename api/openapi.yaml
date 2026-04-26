@@ -612,6 +612,135 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /images/generations:
+    post:
+      summary: Generate image
+      description: OpenAI Images-compatible image generation endpoint.
+      operationId: generateImage
+      tags:
+        - Images
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                model:
+                  type: string
+                  default: gpt-image-2
+                prompt:
+                  type: string
+                size:
+                  type: string
+                quality:
+                  type: string
+                background:
+                  type: string
+                output_format:
+                  type: string
+                response_format:
+                  type: string
+                  enum: [b64_json, url]
+                stream:
+                  type: boolean
+      responses:
+        '200':
+          description: Image generation response
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /images/edits:
+    post:
+      summary: Edit image
+      description: OpenAI Images-compatible image editing endpoint. Supports JSON image URLs and multipart uploads.
+      operationId: editImage
+      tags:
+        - Images
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                model:
+                  type: string
+                  default: gpt-image-2
+                prompt:
+                  type: string
+                images:
+                  type: array
+                  items:
+                    type: object
+                mask:
+                  type: object
+                output_format:
+                  type: string
+                response_format:
+                  type: string
+                  enum: [b64_json, url]
+                stream:
+                  type: boolean
+          multipart/form-data:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Image editing response
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /health:
     servers:
       - url: http://localhost:8080

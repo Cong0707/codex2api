@@ -269,9 +269,11 @@ func main() {
 	log.Printf("  API:    POST /v1/chat/completions")
 	log.Printf("  API:    POST /v1/responses")
 	log.Printf("  API:    POST /v1/responses/compact (compat)")
+	log.Printf("  API:    POST /v1/images/generations")
+	log.Printf("  API:    POST /v1/images/edits")
 	log.Printf("  API:    POST /v1/messages")
 	log.Printf("  API:    GET  /v1/models")
-	log.Printf("  Compat: POST /chat/completions, /responses, /responses/compact, /messages")
+	log.Printf("  Compat: POST /chat/completions, /responses, /responses/compact, /images/generations, /images/edits, /messages")
 	log.Printf("  Compat: GET  /models")
 	log.Println("==========================================")
 

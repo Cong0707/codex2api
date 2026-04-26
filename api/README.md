@@ -73,6 +73,8 @@ Rate limits are returned in response headers:
 | `/v1/chat/completions` | POST | Create chat completion (root-path alias: `/chat/completions`) |
 | `/v1/responses` | POST | Create response (Codex native, root-path alias: `/responses`) |
 | `/v1/responses/compact` | POST | Compact compatibility alias (same as `/v1/responses`, root-path alias: `/responses/compact`) |
+| `/v1/images/generations` | POST | OpenAI Images-compatible image generation endpoint (root-path alias: `/images/generations`) |
+| `/v1/images/edits` | POST | OpenAI Images-compatible image editing endpoint (root-path alias: `/images/edits`) |
 | `/health` | GET | Health check |
 
 If your client uses a `base_url` without `/v1`, the same OpenAI-compatible endpoints are also available on the root paths listed above.
@@ -80,11 +82,16 @@ If your client uses a `base_url` without `/v1`, the same OpenAI-compatible endpo
 ### Model Support
 
 Supported models include:
+- `gpt-5.5`
 - `gpt-5.4`
 - `gpt-5.4-mini`
+- `gpt-5.3-codex`
+- `gpt-image-2`
 - `gpt-5`
 - `gpt-5-codex`
 - `gpt-5-codex-mini`
 - `gpt-5.1`, `gpt-5.1-codex`, etc.
 
-See the OpenAPI spec for the complete list.
+The runtime model list can also be synchronized from the official Codex models page via `POST /api/admin/models/sync`.
+
+See the OpenAPI spec or `GET /v1/models` for the complete list currently exposed by the server.

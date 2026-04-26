@@ -151,6 +151,21 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			public_full_credit_usd REAL DEFAULT 2,
 			model_mapping TEXT DEFAULT '{}'
 		);`,
+		`CREATE TABLE IF NOT EXISTS model_registry (
+			id TEXT PRIMARY KEY,
+			enabled INTEGER DEFAULT 1,
+			category TEXT DEFAULT 'codex',
+			source TEXT DEFAULT 'manual',
+			pro_only INTEGER DEFAULT 0,
+			api_key_auth_available INTEGER DEFAULT 1,
+			last_seen_at TIMESTAMP NULL,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS model_registry_sync (
+			id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			source_url TEXT DEFAULT '',
+			last_synced_at TIMESTAMP NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS proxies (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			url TEXT NOT NULL UNIQUE,

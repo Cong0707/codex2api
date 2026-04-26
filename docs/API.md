@@ -203,6 +203,62 @@ data: [DONE]
 
 ### 3. List Models
 
+### 3. Images
+
+#### 生成图片
+
+**端点:** `POST /v1/images/generations`
+
+**说明:** OpenAI Images 兼容入口。外部请求使用 `gpt-image-2`，内部转为 Codex `/responses` 图像工具链路。
+
+**兼容端点:** `POST /images/generations`
+
+**请求示例:**
+```json
+{
+  "model": "gpt-image-2",
+  "prompt": "Draw a small orange cat",
+  "size": "1024x1024",
+  "quality": "high",
+  "response_format": "b64_json"
+}
+```
+
+#### 编辑图片
+
+**端点:** `POST /v1/images/edits`
+
+**说明:** 支持 JSON `images[].image_url` 和 multipart `image` / `image[]` 上传；`mask.image_url` 或 multipart `mask` 可用于遮罩编辑。
+
+**兼容端点:** `POST /images/edits`
+
+**JSON 请求示例:**
+```json
+{
+  "model": "gpt-image-2",
+  "prompt": "Replace the background with aurora lights",
+  "images": [
+    {"image_url": "https://example.com/source.png"}
+  ],
+  "output_format": "png"
+}
+```
+
+**响应示例:**
+```json
+{
+  "created": 1710000000,
+  "model": "gpt-image-2",
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAA..."
+    }
+  ]
+}
+```
+
+### 4. List Models
+
 **端点:** `GET /v1/models`
 
 **说明:** 获取支持的模型列表。
@@ -880,18 +936,53 @@ data: {"type":"complete","current":3,"total":3,"success":2,"failed":1}
 
 #### GET /api/admin/models
 
-获取支持的模型列表。
+获取当前启用的模型列表，并返回模型注册表元数据。
 
 **响应:**
 ```json
 {
   "models": [
+    "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
-    "gpt-5",
-    "gpt-5-codex",
-    "gpt-5-codex-mini"
-  ]
+    "gpt-5.3-codex",
+    "gpt-image-2"
+  ],
+  "items": [
+    {
+      "id": "gpt-image-2",
+      "enabled": true,
+      "category": "image",
+      "source": "builtin",
+      "pro_only": false,
+      "api_key_auth_available": true
+    }
+  ],
+  "source_url": "https://developers.openai.com/codex/models",
+  "last_synced_at": "2026-04-24T00:00:00Z"
+}
+```
+
+#### POST /api/admin/models/sync
+
+从 OpenAI 官方 Codex 模型页同步模型注册表。同步只新增或更新模型元数据，不会自动删除本地模型；`gpt-image-2` 会始终作为内置图像模型保留。
+
+**响应:**
+```json
+{
+  "added": 0,
+  "updated": 2,
+  "unchanged": 5,
+  "skipped": ["gpt-5.2-codex"],
+  "models": [
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-image-2"
+  ],
+  "last_synced_at": "2026-04-24T00:00:00Z",
+  "source_url": "https://developers.openai.com/codex/models"
 }
 ```
 
