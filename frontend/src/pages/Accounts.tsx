@@ -1,4 +1,4 @@
-import type { ChangeEvent, DragEvent } from 'react'
+import type { ChangeEvent, DragEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getAdminKey } from '../api'
 import Modal from '../components/Modal'
@@ -25,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Plus, RefreshCw, Trash2, Zap, FlaskConical, Ban, Timer, AlertTriangle, Upload, Download, ArrowDownToLine, KeyRound, ExternalLink, FileText, FileJson, BarChart3, Search, Fingerprint, FolderOpen, Lock, Unlock } from 'lucide-react'
+import { Plus, RefreshCw, Trash2, Zap, FlaskConical, Ban, Timer, AlertTriangle, Upload, Download, ArrowDownToLine, KeyRound, ExternalLink, FileText, FileJson, BarChart3, Search, Fingerprint, FolderOpen, Lock, Unlock, RotateCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import AccountUsageModal from '../components/AccountUsageModal'
@@ -2480,7 +2480,7 @@ function UsageCell({ account, t }: { account: AccountRow; t: (key: string, optio
       })
     : t('accounts.uploadSourceAdmin')
 
-  const wrap = (content: JSX.Element, widthClass: string) => (
+  const wrap = (content: ReactNode, widthClass: string) => (
     <div className={`${widthClass} space-y-1`}>
       <div className="text-[11px] text-muted-foreground">{uploaderText}</div>
       {content}

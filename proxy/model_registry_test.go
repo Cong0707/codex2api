@@ -71,6 +71,24 @@ func TestApplyOfficialCodexModelSyncMergesWithBuiltinImageModel(t *testing.T) {
 	}
 }
 
+func TestApplyOfficialCodexModelIDsFallbackSnapshot(t *testing.T) {
+	db := newTestModelRegistryDB(t)
+	ctx := context.Background()
+
+	result, err := applyOfficialCodexModelIDs(ctx, db, fallbackOfficialCodexModelIDs, nil, time.Date(2026, 4, 27, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("applyOfficialCodexModelIDs error: %v", err)
+	}
+	for _, model := range fallbackOfficialCodexModelIDs {
+		if !slices.Contains(result.Models, model) {
+			t.Fatalf("fallback result missing %q in %v", model, result.Models)
+		}
+	}
+	if !slices.Contains(result.Models, "gpt-image-2") {
+		t.Fatalf("fallback sync should keep builtin image model, got %v", result.Models)
+	}
+}
+
 func TestDynamicModelRegistryAffectsValidationImmediately(t *testing.T) {
 	db := newTestModelRegistryDB(t)
 	ctx := context.Background()

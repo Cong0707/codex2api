@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -75,6 +76,15 @@ var builtinModelInfos = []ModelInfo{
 	modelInfoForID("gpt-5.1-codex-mini", ModelSourceBuiltin),
 	modelInfoForID("gpt-5.1-codex-max", ModelSourceBuiltin),
 	modelInfoForID("gpt-image-2", ModelSourceBuiltin),
+}
+
+var fallbackOfficialCodexModelIDs = []string{
+	"gpt-5.5",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.3-codex",
+	"gpt-5.3-codex-spark",
+	"gpt-5.2",
 }
 
 // SupportedModels is the static built-in fallback list. Runtime handlers use
@@ -342,37 +352,33 @@ func isAllowedUpstreamCodexModel(id string) bool {
 	return major == 5 && minor >= 2
 }
 
-// SyncOfficialCodexModels fetches the fixed official docs page and merges discovered models.
-func SyncOfficialCodexModels(ctx context.Context, db *database.DB) (*ModelSyncResult, error) {
-	if db == nil {
-		return nil, fmt.Errorf("数据库不可用，无法同步模型注册表")
-	}
+func fetchOfficialCodexModelsPage(ctx context.Context) (string, int, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, OfficialCodexModelsURL, nil)
 	if err != nil {
-		return nil, err
+		return "", 0, err
 	}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("官方模型页面暂时不可访问，已保留本地模型列表: %w", err)
+		return "", 0, fmt.Errorf("官方模型页面暂时不可访问，已保留本地模型列表: %w", err)
 	}
 	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+	if readErr != nil {
+		return "", resp.StatusCode, readErr
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("官方模型页面返回 %d，已保留本地模型列表", resp.StatusCode)
+		return string(body), resp.StatusCode, fmt.Errorf("官方模型页面返回 %d，已保留本地模型列表", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
-	if err != nil {
-		return nil, err
-	}
-	return ApplyOfficialCodexModelSync(ctx, db, string(body), time.Now().UTC())
+	return string(body), resp.StatusCode, nil
 }
 
-// ApplyOfficialCodexModelSync merges a fetched official docs page into the registry.
-func ApplyOfficialCodexModelSync(ctx context.Context, db *database.DB, html string, syncedAt time.Time) (*ModelSyncResult, error) {
+func applyOfficialCodexModelIDs(ctx context.Context, db *database.DB, ids []string, skipped []string, syncedAt time.Time) (*ModelSyncResult, error) {
 	if db == nil {
 		return nil, fmt.Errorf("数据库不可用，无法同步模型注册表")
 	}
-	ids, skipped := ParseOfficialCodexModelIDs(html)
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("未从官方模型页面解析到可用模型，已保留本地模型列表")
 	}
@@ -422,6 +428,35 @@ func ApplyOfficialCodexModelSync(ctx context.Context, db *database.DB, html stri
 	result.Items = catalog.Items
 	result.LastSyncedAt = syncedAt.UTC()
 	return result, nil
+}
+
+// SyncOfficialCodexModels fetches the fixed official docs page and merges discovered models.
+func SyncOfficialCodexModels(ctx context.Context, db *database.DB) (*ModelSyncResult, error) {
+	if db == nil {
+		return nil, fmt.Errorf("数据库不可用，无法同步模型注册表")
+	}
+	syncedAt := time.Now().UTC()
+	html, statusCode, err := fetchOfficialCodexModelsPage(ctx)
+	if err == nil {
+		result, applyErr := ApplyOfficialCodexModelSync(ctx, db, html, syncedAt)
+		if applyErr == nil {
+			return result, nil
+		}
+		log.Printf("模型同步官方页面解析失败，回退到内置官方快照: err=%v", applyErr)
+		return applyOfficialCodexModelIDs(ctx, db, fallbackOfficialCodexModelIDs, nil, syncedAt)
+	}
+
+	log.Printf("模型同步实时抓取失败，回退到内置官方快照: status=%d err=%v", statusCode, err)
+	return applyOfficialCodexModelIDs(ctx, db, fallbackOfficialCodexModelIDs, nil, syncedAt)
+}
+
+// ApplyOfficialCodexModelSync merges a fetched official docs page into the registry.
+func ApplyOfficialCodexModelSync(ctx context.Context, db *database.DB, html string, syncedAt time.Time) (*ModelSyncResult, error) {
+	if db == nil {
+		return nil, fmt.Errorf("数据库不可用，无法同步模型注册表")
+	}
+	ids, skipped := ParseOfficialCodexModelIDs(html)
+	return applyOfficialCodexModelIDs(ctx, db, ids, skipped, syncedAt)
 }
 
 func modelRegistryMetadataEqual(a database.ModelRegistryRow, b database.ModelRegistryRow) bool {
