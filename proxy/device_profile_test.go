@@ -28,9 +28,9 @@ func TestParseCodexCLIVersion(t *testing.T) {
 		},
 		{
 			name:      "valid codex-tui version",
-			ua:        "codex-tui/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.118.0)",
+			ua:        "codex-tui/0.126.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.126.0)",
 			wantMajor: 0,
-			wantMinor: 118,
+			wantMinor: 126,
 			wantPatch: 0,
 			wantOK:    true,
 		},
@@ -323,13 +323,13 @@ func TestExtractDeviceProfile(t *testing.T) {
 			wantOK:  false,
 		},
 		{
-			name:    "valid codex-tui headers",
-			headers: http.Header{"User-Agent": []string{"codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)"}},
+			name:    "valid codex cli headers",
+			headers: http.Header{"User-Agent": []string{"codex_cli_rs/0.126.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"}},
 			wantOK:  true,
-			wantUA:  "codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)",
+			wantUA:  "codex_cli_rs/0.126.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464",
 		},
 		{
-			name:    "legacy codex cli headers are ignored",
+			name:    "outdated codex cli headers are ignored",
 			headers: http.Header{"User-Agent": []string{"codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"}},
 			wantOK:  false,
 		},
@@ -515,13 +515,13 @@ func TestResolveDeviceProfile(t *testing.T) {
 	// 测试 3: 有效的客户端 headers 会被缓存
 	t.Run("valid client headers are cached", func(t *testing.T) {
 		headers := http.Header{
-			"User-Agent": []string{"codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)"},
+			"User-Agent": []string{"codex_cli_rs/0.126.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"},
 		}
 		profile1 := ResolveDeviceProfile(nil, "test-api-key", headers, cfg)
 
 		// 验证版本被正确提取
-		if !profile1.HasVersion || profile1.Version.minor != 120 {
-			t.Errorf("Expected version 0.120.0, got %+v", profile1.Version)
+		if !profile1.HasVersion || profile1.Version.minor != 126 {
+			t.Errorf("Expected version 0.126.0, got %+v", profile1.Version)
 		}
 
 		// 第二次调用应该返回缓存的值
@@ -534,7 +534,7 @@ func TestResolveDeviceProfile(t *testing.T) {
 	// 测试 4: 不同 API key 应该有不同的缓存
 	t.Run("different api keys have different cache", func(t *testing.T) {
 		headers := http.Header{
-			"User-Agent": []string{"codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)"},
+			"User-Agent": []string{"codex_cli_rs/0.126.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"},
 		}
 		profile1 := ResolveDeviceProfile(nil, "key1", headers, cfg)
 		profile2 := ResolveDeviceProfile(nil, "key2", headers, cfg)
@@ -797,7 +797,7 @@ func TestApplyLegacyDeviceHeaders(t *testing.T) {
 
 	t.Run("detects codex client ua", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "http://example.com", nil)
-		ginHeaders := http.Header{"User-Agent": []string{"codex_cli_rs/0.118.0"}}
+		ginHeaders := http.Header{"User-Agent": []string{"codex_cli_rs/0.126.0"}}
 		ApplyLegacyDeviceHeaders(req, ginHeaders, cfg)
 
 		if !strings.HasPrefix(req.Header.Get("User-Agent"), "codex_cli_rs") {
@@ -809,7 +809,7 @@ func TestApplyLegacyDeviceHeaders(t *testing.T) {
 // Benchmark 测试
 
 func BenchmarkParseCodexCLIVersion(b *testing.B) {
-	ua := "codex_cli_rs/0.117.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"
+	ua := "codex_cli_rs/0.126.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"
 	for i := 0; i < b.N; i++ {
 		parseCodexCLIVersion(ua)
 	}
@@ -830,7 +830,7 @@ func BenchmarkResolveDeviceProfile(b *testing.B) {
 		StabilizeDeviceProfile: true,
 	}
 	headers := http.Header{
-		"User-Agent": []string{"codex_cli_rs/0.118.0 (Ubuntu 24.04; x86_64)"},
+		"User-Agent": []string{"codex_cli_rs/0.126.0 (Ubuntu 24.04; x86_64)"},
 	}
 
 	b.ResetTimer()

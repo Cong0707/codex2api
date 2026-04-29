@@ -7,9 +7,9 @@ import (
 
 // ==================== 动态 User-Agent 生成 ====================
 //
-// 当前 Codex 官方链路已经切到 codex-tui 指纹，gpt-5.5 等新模型会校验
-// 客户端版本。这里默认对齐 CLIProxyAPI 最新上游的稳定指纹，避免继续
-// 透传过旧的 codex_cli_rs 指纹导致 “requires a newer version of Codex”。
+// 当前官方 Codex CLI（openai/codex, @openai/codex）会在 User-Agent 中携带
+// 客户端版本；gpt-5.5 等新模型会据此拦截过旧客户端。这里固定对齐到当前
+// 官方稳定版指纹，避免继续发送过期版本导致 “requires a newer version of Codex”。
 
 // ClientProfile 表示一个模拟客户端的完整身份
 type ClientProfile struct {
@@ -18,10 +18,10 @@ type ClientProfile struct {
 }
 
 const (
-	// StableCodexUserAgent 对齐 CLIProxyAPI 最新 Codex 默认指纹。
-	StableCodexUserAgent  = "codex-tui/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.118.0)"
-	StableCodexVersion    = "0.118.0"
-	StableCodexOriginator = "codex-tui"
+	// StableCodexUserAgent 对齐当前官方 Codex CLI 稳定版指纹。
+	StableCodexUserAgent  = "codex_cli_rs/0.125.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"
+	StableCodexVersion    = "0.125.0"
+	StableCodexOriginator = "codex_cli_rs"
 )
 
 // StableCodexClientProfile 返回稳定的 Codex 客户端画像。
@@ -33,8 +33,8 @@ func StableCodexClientProfile() ClientProfile {
 }
 
 // 预定义客户端画像池。
-// 目前 Codex 请求链路统一固定到稳定 codex-tui 指纹，避免账号池内混入旧
-// codex_cli_rs 标识造成新版模型校验失败。
+// 目前 Codex 请求链路统一固定到稳定官方指纹，避免账号池内混入旧版本
+// 导致新版模型校验失败。
 var clientProfiles = []ClientProfile{
 	StableCodexClientProfile(),
 }

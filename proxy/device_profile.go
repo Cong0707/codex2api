@@ -226,12 +226,13 @@ func mustParseStableCodexVersion() cliVersion {
 	return version
 }
 
-func isCodexTUIUserAgent(userAgent string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(userAgent)), "codex-tui/")
+func isSupportedCodexCLIUserAgent(userAgent string) bool {
+	userAgent = strings.ToLower(strings.TrimSpace(userAgent))
+	return strings.HasPrefix(userAgent, "codex_cli_rs/") || strings.HasPrefix(userAgent, "codex-tui/")
 }
 
 func shouldPassThroughCodexUserAgent(userAgent string) bool {
-	if !isCodexTUIUserAgent(userAgent) {
+	if !isSupportedCodexCLIUserAgent(userAgent) {
 		return false
 	}
 	version, ok := parseCodexCLIVersion(userAgent)

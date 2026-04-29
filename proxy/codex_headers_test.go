@@ -16,16 +16,16 @@ func TestResolveCodexRequestIdentityStableFallback(t *testing.T) {
 	}
 }
 
-func TestResolveCodexRequestIdentityUsesDownstreamCodexTUI(t *testing.T) {
+func TestResolveCodexRequestIdentityUsesDownstreamCodexCLI(t *testing.T) {
 	headers := http.Header{}
-	headers.Set("User-Agent", "codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)")
+	headers.Set("User-Agent", "codex_cli_rs/0.126.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464")
 
 	identity := resolveCodexRequestIdentity(nil, "", headers, &DeviceProfileConfig{StabilizeDeviceProfile: false})
 	if identity.UserAgent != headers.Get("User-Agent") {
 		t.Fatalf("User-Agent = %q, want downstream %q", identity.UserAgent, headers.Get("User-Agent"))
 	}
-	if identity.Version != "0.120.0" {
-		t.Fatalf("Version = %q, want %q", identity.Version, "0.120.0")
+	if identity.Version != "0.126.0" {
+		t.Fatalf("Version = %q, want %q", identity.Version, "0.126.0")
 	}
 }
 
@@ -50,8 +50,8 @@ func TestApplyCodexRequestHeaders(t *testing.T) {
 	}
 
 	identity := codexRequestIdentity{
-		UserAgent: "codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)",
-		Version:   "0.120.0",
+		UserAgent: "codex_cli_rs/0.126.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464",
+		Version:   "0.126.0",
 	}
 	applyCodexRequestHeaders(req, "token", "acc-id", "session-123", identity, true, nil)
 
