@@ -1801,6 +1801,10 @@ func (db *DB) ListActiveForAdmin(ctx context.Context) ([]*AccountRow, error) {
 		         'codex_5h_used_percent', COALESCE(a.credentials->>'codex_5h_used_percent', ''),
 		         'codex_5h_reset_at', COALESCE(a.credentials->>'codex_5h_reset_at', ''),
 		         'codex_7d_reset_at', COALESCE(a.credentials->>'codex_7d_reset_at', ''),
+		         'image_web_remaining', COALESCE(a.credentials->>'image_web_remaining', ''),
+		         'image_web_total', COALESCE(a.credentials->>'image_web_total', ''),
+		         'image_web_reset_at', COALESCE(a.credentials->>'image_web_reset_at', ''),
+		         'image_official_available', COALESCE(a.credentials->>'image_official_available', ''),
 		         'refresh_token_present', CASE WHEN COALESCE(a.credentials->>'refresh_token', '') <> '' THEN '1' ELSE '' END,
 		         'access_token_present', CASE WHEN COALESCE(a.credentials->>'access_token', '') <> '' THEN '1' ELSE '' END
 		       ) AS credentials,
@@ -1827,6 +1831,10 @@ func (db *DB) ListActiveForAdmin(ctx context.Context) ([]*AccountRow, error) {
 		         'codex_5h_used_percent', COALESCE(json_extract(a.credentials, '$.codex_5h_used_percent'), ''),
 		         'codex_5h_reset_at', COALESCE(json_extract(a.credentials, '$.codex_5h_reset_at'), ''),
 		         'codex_7d_reset_at', COALESCE(json_extract(a.credentials, '$.codex_7d_reset_at'), ''),
+		         'image_web_remaining', COALESCE(json_extract(a.credentials, '$.image_web_remaining'), ''),
+		         'image_web_total', COALESCE(json_extract(a.credentials, '$.image_web_total'), ''),
+		         'image_web_reset_at', COALESCE(json_extract(a.credentials, '$.image_web_reset_at'), ''),
+		         'image_official_available', COALESCE(json_extract(a.credentials, '$.image_official_available'), ''),
 		         'refresh_token_present', CASE WHEN COALESCE(json_extract(a.credentials, '$.refresh_token'), '') <> '' THEN '1' ELSE '' END,
 		         'access_token_present', CASE WHEN COALESCE(json_extract(a.credentials, '$.access_token'), '') <> '' THEN '1' ELSE '' END
 		       ) AS credentials,

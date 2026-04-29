@@ -61,3 +61,14 @@ func PreferPlanType(a, b string) string {
 	}
 	return pb
 }
+
+// OfficialImageQuotaForPlan 返回官方图片链路可用计数。
+// 当前仅用于前端展示与是否允许走官方兜底的快速判断。
+func OfficialImageQuotaForPlan(plan string) int {
+	switch NormalizePlanType(plan) {
+	case "plus", "pro", "team", "enterprise":
+		return 1
+	default:
+		return 0
+	}
+}

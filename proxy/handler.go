@@ -517,14 +517,38 @@ func (h *Handler) acquireAccountForRequest(c *gin.Context, exclude map[int64]boo
 	return acc
 }
 
+func mergeAccountMatchers(matchers ...auth.AccountMatcher) auth.AccountMatcher {
+	active := make([]auth.AccountMatcher, 0, len(matchers))
+	for _, matcher := range matchers {
+		if matcher != nil {
+			active = append(active, matcher)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	return func(acc *auth.Account) bool {
+		for _, matcher := range active {
+			if !matcher(acc) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
 func (h *Handler) acquireAccountForRequestWithAffinity(c *gin.Context, affinityKey string, exclude map[int64]bool) (*auth.Account, string) {
+	return h.acquireAccountForRequestWithMatcherAndAffinity(c, affinityKey, exclude, nil)
+}
+
+func (h *Handler) acquireAccountForRequestWithMatcherAndAffinity(c *gin.Context, affinityKey string, exclude map[int64]bool, extraMatcher auth.AccountMatcher) (*auth.Account, string) {
 	if h == nil || h.store == nil {
 		return nil, ""
 	}
 	if exclude == nil {
 		exclude = make(map[int64]bool)
 	}
-	matcher := h.accountMatcherForCurrentPort(c)
+	matcher := mergeAccountMatchers(h.accountMatcherForCurrentPort(c), extraMatcher)
 	startedAt := requestStartTime(c)
 	waitRounds := 0
 

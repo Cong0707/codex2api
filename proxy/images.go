@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
+	"github.com/codex2api/proxy/webimage"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -156,6 +158,10 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 		responseFormat = "b64_json"
 	}
 	stream := gjson.GetBytes(rawBody, "stream").Bool()
+	n := gjson.GetBytes(rawBody, "n").Int()
+	if n <= 0 {
+		n = 1
+	}
 
 	tool := []byte(`{"type":"image_generation","action":"generate","model":""}`)
 	tool, _ = sjson.SetBytes(tool, "model", imageModel)
@@ -171,7 +177,22 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, nil, tool)
-	h.forwardImagesRequest(c, "/v1/images/generations", imageModel, responsesBody, responseFormat, "image_generation", stream)
+	if n <= 1 {
+		if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+			InboundEndpoint: "/v1/images/generations",
+			RequestModel:    imageModel,
+			Prompt:          prompt,
+			ResponseFormat:  responseFormat,
+			StreamPrefix:    "image_generation",
+			Stream:          stream,
+			ResponsesBody:   responsesBody,
+		}); handled {
+			return
+		} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
+			return
+		}
+	}
+	h.forwardImagesRequestWithMatcher(c, "/v1/images/generations", imageModel, responsesBody, responseFormat, "image_generation", stream, officialImageAccountMatcher)
 }
 
 func (h *Handler) ImagesEdits(c *gin.Context) {
@@ -248,10 +269,38 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 		responseFormat = "b64_json"
 	}
 	stream := parseBoolField(c.PostForm("stream"), false)
+	n := parseIntField(c.PostForm("n"), 1)
 
 	tool := buildImagesEditToolFromForm(c, imageModel, maskDataURL)
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	h.forwardImagesRequest(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream)
+	if n <= 1 && strings.TrimSpace(maskDataURL) == "" {
+		refs := make([]webimage.ReferenceImage, 0, len(imageFiles))
+		for _, fileHeader := range imageFiles {
+			ref, refErr := multipartFileHeaderToReferenceImage(fileHeader)
+			if refErr != nil {
+				refs = nil
+				break
+			}
+			refs = append(refs, ref)
+		}
+		if len(refs) == len(imageFiles) && len(refs) > 0 {
+			if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+				InboundEndpoint: "/v1/images/edits",
+				RequestModel:    imageModel,
+				Prompt:          prompt,
+				References:      refs,
+				ResponseFormat:  responseFormat,
+				StreamPrefix:    "image_edit",
+				Stream:          stream,
+				ResponsesBody:   responsesBody,
+			}); handled {
+				return
+			} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
+				return
+			}
+		}
+	}
+	h.forwardImagesRequestWithMatcher(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, officialImageAccountMatcher)
 }
 
 func buildImagesEditToolFromForm(c *gin.Context, imageModel, maskDataURL string) []byte {
@@ -331,6 +380,10 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 		responseFormat = "b64_json"
 	}
 	stream := gjson.GetBytes(rawBody, "stream").Bool()
+	n := gjson.GetBytes(rawBody, "n").Int()
+	if n <= 0 {
+		n = 1
+	}
 
 	tool := []byte(`{"type":"image_generation","action":"edit","model":""}`)
 	tool, _ = sjson.SetBytes(tool, "model", imageModel)
@@ -349,7 +402,25 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	h.forwardImagesRequest(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream)
+	if n <= 1 && maskDataURL == "" {
+		if refs, refErr := webReferencesFromImageURLs(images); refErr == nil && len(refs) > 0 {
+			if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+				InboundEndpoint: "/v1/images/edits",
+				RequestModel:    imageModel,
+				Prompt:          prompt,
+				References:      refs,
+				ResponseFormat:  responseFormat,
+				StreamPrefix:    "image_edit",
+				Stream:          stream,
+				ResponsesBody:   responsesBody,
+			}); handled {
+				return
+			} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
+				return
+			}
+		}
+	}
+	h.forwardImagesRequestWithMatcher(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, officialImageAccountMatcher)
 }
 
 func buildImagesResponsesRequest(prompt string, images []string, toolJSON []byte) []byte {
@@ -652,6 +723,15 @@ func writeChatCompletionsImageStream(c *gin.Context, model, chunkID string, crea
 }
 
 func (h *Handler) handleChatCompletionsImageFallback(c *gin.Context, rawBody []byte, model string) {
+	if handled, state := h.tryHandleWebChatCompletionsImageRequest(c, rawBody, model); handled {
+		return
+	} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
+		return
+	}
+	h.handleChatCompletionsImageFallbackWithMatcher(c, rawBody, model, officialImageAccountMatcher)
+}
+
+func (h *Handler) handleChatCompletionsImageFallbackWithMatcher(c *gin.Context, rawBody []byte, model string, extraMatcher auth.AccountMatcher) {
 	rawBody = normalizeServiceTierField(rawBody)
 	isStream := gjson.GetBytes(rawBody, "stream").Bool()
 	reasoningEffort := extractReasoningEffort(rawBody)
@@ -659,7 +739,7 @@ func (h *Handler) handleChatCompletionsImageFallback(c *gin.Context, rawBody []b
 	if serviceTier != "" {
 		c.Set("x-service-tier", serviceTier)
 	}
-	logRequestLifecycleStart(c, "/v1/chat/completions", model, isStream, reasoningEffort)
+	logRequestLifecycleStartOnce(c, "/v1/chat/completions", model, isStream, reasoningEffort)
 
 	responsesBody, err := buildChatCompletionsImageResponsesRequest(rawBody, model)
 	if err != nil {
@@ -681,7 +761,7 @@ func (h *Handler) handleChatCompletionsImageFallback(c *gin.Context, rawBody []b
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attemptAcquireStartedAt := time.Now()
-		account, stickyProxyURL := h.acquireAccountForRequestWithAffinity(c, affinityKey, excludeAccounts)
+		account, stickyProxyURL := h.acquireAccountForRequestWithMatcherAndAffinity(c, affinityKey, excludeAccounts, extraMatcher)
 		attemptAcquireMs := int(time.Since(attemptAcquireStartedAt).Milliseconds())
 		if account == nil {
 			if lastStatusCode != 0 && len(lastBody) > 0 {
@@ -855,11 +935,15 @@ func (h *Handler) handleChatCompletionsImageFallback(c *gin.Context, rawBody []b
 }
 
 func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestModel string, responsesBody []byte, responseFormat, streamPrefix string, stream bool) {
+	h.forwardImagesRequestWithMatcher(c, inboundEndpoint, requestModel, responsesBody, responseFormat, streamPrefix, stream, nil)
+}
+
+func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoint, requestModel string, responsesBody []byte, responseFormat, streamPrefix string, stream bool, extraMatcher auth.AccountMatcher) {
 	requestStartedAt := requestStartTime(c)
 	apiKey := requestAPIKeyFromHeaders(c.Request.Header)
 	sessionID := ResolveSessionID(c.Request.Header, responsesBody)
 	affinityKey := sessionAffinityKey(sessionID, apiKey)
-	logRequestLifecycleStart(c, inboundEndpoint, requestModel, stream, "")
+	logRequestLifecycleStartOnce(c, inboundEndpoint, requestModel, stream, "")
 	maxRetries := h.getMaxRetries()
 	var lastErr error
 	var lastStatusCode int
@@ -868,7 +952,7 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attemptAcquireStartedAt := time.Now()
-		account, stickyProxyURL := h.acquireAccountForRequestWithAffinity(c, affinityKey, excludeAccounts)
+		account, stickyProxyURL := h.acquireAccountForRequestWithMatcherAndAffinity(c, affinityKey, excludeAccounts, extraMatcher)
 		attemptAcquireMs := int(time.Since(attemptAcquireStartedAt).Milliseconds())
 		if account == nil {
 			if lastStatusCode == http.StatusTooManyRequests && len(lastBody) > 0 {

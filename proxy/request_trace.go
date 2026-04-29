@@ -56,6 +56,18 @@ func logRequestLifecycleStart(c *gin.Context, endpoint, model string, stream boo
 	log.Printf("请求开始: rid=%s endpoint=%s model=%s stream=%t%s", rid, security.SanitizeLog(endpoint), security.SanitizeLog(model), stream, extra)
 }
 
+func logRequestLifecycleStartOnce(c *gin.Context, endpoint, model string, stream bool, effort string) {
+	if c != nil {
+		if logged, ok := c.Get("x-request-lifecycle-logged"); ok {
+			if done, ok := logged.(bool); ok && done {
+				return
+			}
+		}
+		c.Set("x-request-lifecycle-logged", true)
+	}
+	logRequestLifecycleStart(c, endpoint, model, stream, effort)
+}
+
 func logRequestDispatch(c *gin.Context, endpoint string, attempt int, acc *auth.Account, proxyURL, model, effort string, attemptAcquireMs int) {
 	rid := requestTraceID(c)
 	accountID, email, plan := accountTraceFields(acc)

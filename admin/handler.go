@@ -273,6 +273,10 @@ type accountResponse struct {
 	UsagePercent5h      *float64                   `json:"usage_percent_5h"`
 	Reset5hAt           string                     `json:"reset_5h_at,omitempty"`
 	Reset7dAt           string                     `json:"reset_7d_at,omitempty"`
+	ImageWebRemaining   *int                       `json:"image_web_remaining,omitempty"`
+	ImageWebTotal       *int                       `json:"image_web_total,omitempty"`
+	ImageWebResetAt     string                     `json:"image_web_reset_at,omitempty"`
+	ImageOfficialCount  *int                       `json:"image_official_available,omitempty"`
 	ScoreBreakdown      schedulerBreakdownResponse `json:"scheduler_breakdown"`
 	LastUnauthorizedAt  string                     `json:"last_unauthorized_at,omitempty"`
 	LastRateLimitedAt   string                     `json:"last_rate_limited_at,omitempty"`
@@ -300,6 +304,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 	now := time.Now()
 
 	h.store.TriggerUsageProbeAsync()
+	h.store.TriggerImageQuotaProbeAsync()
 	h.store.TriggerRecoveryProbeAsync()
 
 	rows, err := h.db.ListActiveForAdmin(ctx)
@@ -376,6 +381,20 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			}
 			if t := acc.GetReset7dAt(); !t.IsZero() {
 				resp.Reset7dAt = t.Format(time.RFC3339)
+			}
+			if remaining, total, resetAt, officialAvailable, valid, _ := acc.GetImageQuotaSnapshot(); valid {
+				remainingCopy := remaining
+				totalCopy := total
+				officialCopy := officialAvailable
+				resp.ImageWebRemaining = &remainingCopy
+				resp.ImageWebTotal = &totalCopy
+				resp.ImageOfficialCount = &officialCopy
+				if !resetAt.IsZero() {
+					resp.ImageWebResetAt = resetAt.Format(time.RFC3339)
+				}
+			} else {
+				officialCopy := auth.OfficialImageQuotaForPlan(resp.PlanType)
+				resp.ImageOfficialCount = &officialCopy
 			}
 			if t := acc.GetLastUsedAt(); !t.IsZero() {
 				resp.LastUsedAt = t.Format(time.RFC3339)
@@ -471,6 +490,37 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			if resp.Status == "active" || resp.Status == "ready" {
 				resp.Status = reason
 			}
+		}
+		if resp.ImageWebRemaining == nil {
+			if raw := strings.TrimSpace(row.GetCredential("image_web_remaining")); raw != "" {
+				if parsed, err := strconv.Atoi(raw); err == nil {
+					parsedCopy := parsed
+					resp.ImageWebRemaining = &parsedCopy
+				}
+			}
+		}
+		if resp.ImageWebTotal == nil {
+			if raw := strings.TrimSpace(row.GetCredential("image_web_total")); raw != "" {
+				if parsed, err := strconv.Atoi(raw); err == nil {
+					parsedCopy := parsed
+					resp.ImageWebTotal = &parsedCopy
+				}
+			}
+		}
+		if resp.ImageWebResetAt == "" {
+			if raw := strings.TrimSpace(row.GetCredential("image_web_reset_at")); raw != "" {
+				resp.ImageWebResetAt = raw
+			}
+		}
+		if resp.ImageOfficialCount == nil {
+			officialAvailable := auth.OfficialImageQuotaForPlan(resp.PlanType)
+			if raw := strings.TrimSpace(row.GetCredential("image_official_available")); raw != "" {
+				if parsed, err := strconv.Atoi(raw); err == nil {
+					officialAvailable = parsed
+				}
+			}
+			officialCopy := officialAvailable
+			resp.ImageOfficialCount = &officialCopy
 		}
 		if rc, ok := reqCounts[row.ID]; ok {
 			resp.SuccessRequests = rc.SuccessCount

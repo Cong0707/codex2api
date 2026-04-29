@@ -77,15 +77,24 @@ type Account struct {
 	ErrorMsg       string
 
 	// 用量进度（从 Codex 响应头被动解析）
-	UsagePercent7d        float64 // 7d 窗口使用率 0-100+
-	UsagePercent7dValid   bool
-	Reset7dAt             time.Time // 7d 窗口重置时间
-	UsagePercent5h        float64   // 5h 窗口使用率 0-100+
-	UsagePercent5hValid   bool
-	Reset5hAt             time.Time // 5h 窗口重置时间
-	UsageUpdatedAt        time.Time
-	usageProbeInFlight    bool
-	recoveryProbeInFlight bool
+	UsagePercent7d          float64 // 7d 窗口使用率 0-100+
+	UsagePercent7dValid     bool
+	Reset7dAt               time.Time // 7d 窗口重置时间
+	UsagePercent5h          float64   // 5h 窗口使用率 0-100+
+	UsagePercent5hValid     bool
+	Reset5hAt               time.Time // 5h 窗口重置时间
+	UsageUpdatedAt          time.Time
+	usageProbeInFlight      bool
+	imageQuotaProbeInFlight bool
+	recoveryProbeInFlight   bool
+
+	// 网页图片额度（ChatGPT Web）
+	ImageWebRemaining      int
+	ImageWebTotal          int
+	ImageWebQuotaValid     bool
+	ImageWebResetAt        time.Time
+	ImageQuotaUpdatedAt    time.Time
+	ImageOfficialAvailable int
 
 	// 调度健康信号
 	HealthTier              AccountHealthTier
@@ -125,6 +134,7 @@ type Account struct {
 const (
 	defaultBackgroundRefreshInterval = 2 * time.Minute
 	defaultUsageProbeMaxAge          = 10 * time.Minute
+	defaultImageQuotaProbeMaxAge     = 30 * time.Minute
 	defaultRecoveryProbeInterval     = 30 * time.Minute
 )
 
@@ -628,6 +638,42 @@ func (a *Account) GetUsagePercent5h() (float64, bool) {
 	return a.UsagePercent5h, a.UsagePercent5hValid
 }
 
+// SetImageQuotaSnapshot 更新网页图片额度快照。
+func (a *Account) SetImageQuotaSnapshot(remaining, total int, resetAt, updatedAt time.Time, officialAvailable int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.ImageWebRemaining = remaining
+	a.ImageWebTotal = total
+	a.ImageWebResetAt = resetAt
+	a.ImageQuotaUpdatedAt = updatedAt
+	a.ImageWebQuotaValid = remaining >= 0 && total >= 0
+	a.ImageOfficialAvailable = officialAvailable
+}
+
+// GetImageQuotaSnapshot 获取网页图片额度快照。
+func (a *Account) GetImageQuotaSnapshot() (remaining, total int, resetAt time.Time, officialAvailable int, valid bool, updatedAt time.Time) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.ImageWebRemaining, a.ImageWebTotal, a.ImageWebResetAt, a.ImageOfficialAvailable, a.ImageWebQuotaValid, a.ImageQuotaUpdatedAt
+}
+
+// DecrementImageWebQuota 成功生成后立刻扣减网页图片剩余额度。
+func (a *Account) DecrementImageWebQuota(delta int) {
+	if delta <= 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.ImageWebQuotaValid {
+		return
+	}
+	a.ImageWebRemaining -= delta
+	if a.ImageWebRemaining < 0 {
+		a.ImageWebRemaining = 0
+	}
+	a.ImageQuotaUpdatedAt = time.Now().UTC()
+}
+
 // ClearUsageCache 清除内存中的用量缓存，下次请求时从上游重新获取
 func (a *Account) ClearUsageCache() {
 	a.mu.Lock()
@@ -769,6 +815,41 @@ func (a *Account) FinishUsageProbe() {
 	a.usageProbeInFlight = false
 }
 
+// NeedsImageQuotaProbe 判断是否需要刷新网页图片额度。
+func (a *Account) NeedsImageQuotaProbe(maxAge time.Duration) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.imageQuotaProbeInFlight || a.AccessToken == "" || a.Status == StatusError {
+		return false
+	}
+	if a.Status == StatusCooldown && a.CooldownReason == "unauthorized" {
+		return false
+	}
+	if !a.ImageWebQuotaValid || a.ImageQuotaUpdatedAt.IsZero() {
+		return true
+	}
+	return time.Since(a.ImageQuotaUpdatedAt) > maxAge
+}
+
+// TryBeginImageQuotaProbe 尝试开始一次网页图片额度探针。
+func (a *Account) TryBeginImageQuotaProbe() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.imageQuotaProbeInFlight {
+		return false
+	}
+	a.imageQuotaProbeInFlight = true
+	return true
+}
+
+// FinishImageQuotaProbe 结束一次网页图片额度探针。
+func (a *Account) FinishImageQuotaProbe() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.imageQuotaProbeInFlight = false
+}
+
 // NeedsRecoveryProbe 判断是否需要对被封禁账号做低频恢复探测
 func (a *Account) NeedsRecoveryProbe(minInterval time.Duration) bool {
 	a.mu.RLock()
@@ -840,6 +921,9 @@ type Store struct {
 	usageProbeMu              sync.RWMutex
 	usageProbe                func(context.Context, *Account) error
 	usageProbeBatch           atomic.Bool
+	imageQuotaProbeMu         sync.RWMutex
+	imageQuotaProbe           func(context.Context, *Account) error
+	imageQuotaProbeBatch      atomic.Bool
 	recoveryProbeBatch        atomic.Bool
 	autoCleanUnauthorized     atomic.Bool
 	autoCleanRateLimited      atomic.Bool
@@ -849,6 +933,7 @@ type Store struct {
 	autoCleanupBatch          atomic.Bool
 	backgroundRefreshInterval int64 // 后台刷新/探针巡检间隔（ns）
 	usageProbeMaxAge          int64 // 用量探针快照最大缓存时长（ns）
+	imageQuotaProbeMaxAge     int64 // 网页图片额度探针快照最大缓存时长（ns）
 	recoveryProbeInterval     int64 // 恢复探测最小间隔（ns）
 	plusPortEnabled           atomic.Bool
 	plusPortAccessFree        atomic.Bool
@@ -993,6 +1078,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	s.testModel.Store(settings.TestModel)
 	s.SetBackgroundRefreshInterval(time.Duration(settings.BackgroundRefreshIntervalMinutes) * time.Minute)
 	s.SetUsageProbeMaxAge(time.Duration(settings.UsageProbeMaxAgeMinutes) * time.Minute)
+	s.SetImageQuotaProbeMaxAge(defaultImageQuotaProbeMaxAge)
 	s.SetRecoveryProbeInterval(time.Duration(settings.RecoveryProbeIntervalMinutes) * time.Minute)
 	s.autoCleanUnauthorized.Store(settings.AutoCleanUnauthorized)
 	s.autoCleanRateLimited.Store(settings.AutoCleanRateLimited)
@@ -1432,6 +1518,23 @@ func (s *Store) GetUsageProbeMaxAge() time.Duration {
 	return d
 }
 
+// SetImageQuotaProbeMaxAge 设置网页图片额度探针最大缓存时长。
+func (s *Store) SetImageQuotaProbeMaxAge(d time.Duration) {
+	if d <= 0 {
+		d = defaultImageQuotaProbeMaxAge
+	}
+	atomic.StoreInt64(&s.imageQuotaProbeMaxAge, int64(d))
+}
+
+// GetImageQuotaProbeMaxAge 获取网页图片额度探针最大缓存时长。
+func (s *Store) GetImageQuotaProbeMaxAge() time.Duration {
+	d := time.Duration(atomic.LoadInt64(&s.imageQuotaProbeMaxAge))
+	if d <= 0 {
+		return defaultImageQuotaProbeMaxAge
+	}
+	return d
+}
+
 // SetRecoveryProbeInterval 设置恢复探测最小间隔。
 func (s *Store) SetRecoveryProbeInterval(d time.Duration) {
 	if d <= 0 {
@@ -1570,6 +1673,37 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 				account.SetUsageSnapshot5h(parsed, resetAt)
 			}
 		}
+		imageRemaining := -1
+		imageTotal := -1
+		if raw := row.GetCredential("image_web_remaining"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil {
+				imageRemaining = parsed
+			}
+		}
+		if raw := row.GetCredential("image_web_total"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil {
+				imageTotal = parsed
+			}
+		}
+		imageResetAt := time.Time{}
+		if raw := row.GetCredential("image_web_reset_at"); raw != "" {
+			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+				imageResetAt = parsed
+			}
+		}
+		imageUpdatedAt := time.Time{}
+		if raw := row.GetCredential("image_quota_updated_at"); raw != "" {
+			if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+				imageUpdatedAt = parsed
+			}
+		}
+		officialAvailable := OfficialImageQuotaForPlan(account.PlanType)
+		if raw := row.GetCredential("image_official_available"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil {
+				officialAvailable = parsed
+			}
+		}
+		account.SetImageQuotaSnapshot(imageRemaining, imageTotal, imageResetAt, imageUpdatedAt, officialAvailable)
 		account.mu.Lock()
 		account.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
 		account.mu.Unlock()
@@ -1613,6 +1747,7 @@ func (s *Store) StartBackgroundRefresh() {
 			case <-refreshTimer.C:
 				s.parallelRefreshAll(context.Background())
 				s.TriggerUsageProbeAsync()
+				s.TriggerImageQuotaProbeAsync()
 				s.TriggerRecoveryProbeAsync()
 				refreshTimer.Reset(s.GetBackgroundRefreshInterval())
 			case <-s.backgroundRefreshWakeCh:
@@ -2357,11 +2492,76 @@ func (s *Store) PersistUsageSnapshot(acc *Account, pct7d float64) {
 	}
 }
 
+// PersistImageQuotaSnapshot 持久化网页图片额度快照。
+func (s *Store) PersistImageQuotaSnapshot(acc *Account, remaining, total int, resetAt, updatedAt time.Time, officialAvailable int) {
+	if acc == nil {
+		return
+	}
+	acc.SetImageQuotaSnapshot(remaining, total, resetAt, updatedAt, officialAvailable)
+	if s.db == nil {
+		return
+	}
+	fields := map[string]interface{}{
+		"image_web_remaining":      remaining,
+		"image_web_total":          total,
+		"image_official_available": officialAvailable,
+	}
+	if !resetAt.IsZero() {
+		fields["image_web_reset_at"] = resetAt.UTC().Format(time.RFC3339)
+	}
+	if !updatedAt.IsZero() {
+		fields["image_quota_updated_at"] = updatedAt.UTC().Format(time.RFC3339)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.db.UpdateCredentials(ctx, acc.DBID, fields); err != nil {
+		log.Printf("[账号 %d] 持久化网页图片额度失败: %v", acc.DBID, err)
+	}
+}
+
+// DecrementImageQuotaAfterSuccess 成功生图后立刻扣减网页图片剩余额度。
+func (s *Store) DecrementImageQuotaAfterSuccess(acc *Account, delta int) {
+	if acc == nil || delta <= 0 {
+		return
+	}
+	acc.DecrementImageWebQuota(delta)
+	if s.db == nil {
+		return
+	}
+	remaining, total, resetAt, officialAvailable, valid, updatedAt := acc.GetImageQuotaSnapshot()
+	if !valid {
+		return
+	}
+	fields := map[string]interface{}{
+		"image_web_remaining":      remaining,
+		"image_web_total":          total,
+		"image_official_available": officialAvailable,
+	}
+	if !resetAt.IsZero() {
+		fields["image_web_reset_at"] = resetAt.UTC().Format(time.RFC3339)
+	}
+	if !updatedAt.IsZero() {
+		fields["image_quota_updated_at"] = updatedAt.UTC().Format(time.RFC3339)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.db.UpdateCredentials(ctx, acc.DBID, fields); err != nil {
+		log.Printf("[账号 %d] 扣减网页图片额度失败: %v", acc.DBID, err)
+	}
+}
+
 // SetUsageProbeFunc 注册主动探针回调
 func (s *Store) SetUsageProbeFunc(fn func(context.Context, *Account) error) {
 	s.usageProbeMu.Lock()
 	defer s.usageProbeMu.Unlock()
 	s.usageProbe = fn
+}
+
+// SetImageQuotaProbeFunc 注册网页图片额度探针回调。
+func (s *Store) SetImageQuotaProbeFunc(fn func(context.Context, *Account) error) {
+	s.imageQuotaProbeMu.Lock()
+	defer s.imageQuotaProbeMu.Unlock()
+	s.imageQuotaProbe = fn
 }
 
 // TriggerUsageProbeAsync 异步触发一次批量用量探针
@@ -2373,6 +2573,18 @@ func (s *Store) TriggerUsageProbeAsync() {
 	go func() {
 		defer s.usageProbeBatch.Store(false)
 		s.parallelProbeUsage(context.Background())
+	}()
+}
+
+// TriggerImageQuotaProbeAsync 异步触发一次网页图片额度探针。
+func (s *Store) TriggerImageQuotaProbeAsync() {
+	if !s.imageQuotaProbeBatch.CompareAndSwap(false, true) {
+		return
+	}
+
+	go func() {
+		defer s.imageQuotaProbeBatch.Store(false)
+		s.parallelProbeImageQuota(context.Background())
 	}()
 }
 
@@ -2759,6 +2971,48 @@ func (s *Store) parallelProbeUsage(ctx context.Context) {
 			defer cancel()
 			if err := probeFn(probeCtx, account); err != nil {
 				log.Printf("[账号 %d] 用量探针失败: %v", account.DBID, err)
+			}
+		}(acc)
+	}
+
+	wg.Wait()
+}
+
+func (s *Store) parallelProbeImageQuota(ctx context.Context) {
+	s.imageQuotaProbeMu.RLock()
+	probeFn := s.imageQuotaProbe
+	s.imageQuotaProbeMu.RUnlock()
+	if probeFn == nil {
+		return
+	}
+
+	s.mu.RLock()
+	accounts := make([]*Account, len(s.accounts))
+	copy(accounts, s.accounts)
+	s.mu.RUnlock()
+
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+
+	for _, acc := range accounts {
+		if !acc.NeedsImageQuotaProbe(s.GetImageQuotaProbeMaxAge()) {
+			continue
+		}
+		if !acc.TryBeginImageQuotaProbe() {
+			continue
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(account *Account) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer account.FinishImageQuotaProbe()
+
+			probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+			defer cancel()
+			if err := probeFn(probeCtx, account); err != nil {
+				log.Printf("[账号 %d] 网页图片额度探针失败: %v", account.DBID, err)
 			}
 		}(acc)
 	}

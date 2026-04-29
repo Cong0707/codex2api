@@ -2473,6 +2473,8 @@ function UsageCell({ account, t }: { account: AccountRow; t: (key: string, optio
   const plan = (account.plan_type || '').toLowerCase()
   const has7d = account.usage_percent_7d !== null && account.usage_percent_7d !== undefined
   const has5h = account.usage_percent_5h !== null && account.usage_percent_5h !== undefined
+  const hasImageWebRemaining = account.image_web_remaining !== null && account.image_web_remaining !== undefined
+  const hasImageWebTotal = account.image_web_total !== null && account.image_web_total !== undefined
   const uploaderText = account.uploader_id
     ? t('accounts.uploadSourceUser', {
         id: account.uploader_id,
@@ -2480,10 +2482,29 @@ function UsageCell({ account, t }: { account: AccountRow; t: (key: string, optio
       })
     : t('accounts.uploadSourceAdmin')
 
+  const renderImageQuota = () => {
+    const official = account.image_official_available ?? 0
+    if (!hasImageWebRemaining || !hasImageWebTotal) {
+      return (
+        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+          <span className="font-medium">image</span>
+          <span>{`-/-+${official}`}</span>
+        </div>
+      )
+    }
+    return (
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <span className="font-medium">image</span>
+        <span>{`${account.image_web_remaining}/${account.image_web_total}+${official}`}</span>
+      </div>
+    )
+  }
+
   const wrap = (content: ReactNode, widthClass: string) => (
     <div className={`${widthClass} space-y-1`}>
       <div className="text-[11px] text-muted-foreground">{uploaderText}</div>
       {content}
+      {renderImageQuota()}
     </div>
   )
 

@@ -62,6 +62,10 @@ export interface AccountRow {
   usage_percent_5h?: number | null
   reset_5h_at?: ISODateString
   reset_7d_at?: ISODateString
+  image_web_remaining?: number | null
+  image_web_total?: number | null
+  image_web_reset_at?: ISODateString
+  image_official_available?: number | null
   cooldown_until?: ISODateString
   locked?: boolean
 }
