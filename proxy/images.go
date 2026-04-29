@@ -127,6 +127,49 @@ func multipartFileToDataURL(fileHeader *multipart.FileHeader) (string, error) {
 	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
+func (h *Handler) imageRoutingForCurrentPort(c *gin.Context) (webAllowed bool, officialAllowed bool) {
+	if h == nil || h.store == nil || h.cfg == nil || c == nil || c.Request == nil || !h.shouldApplyPlusPortPolicy() {
+		return true, true
+	}
+	reqPort := resolveRequestPort(c.Request)
+	if reqPort <= 0 {
+		return true, true
+	}
+	switch reqPort {
+	case h.cfg.Port:
+		// 主端口定位为免费端口：图片只走 ChatGPT Web 反代额度，不回退官方 API。
+		return true, false
+	case h.cfg.Port + 1:
+		// Plus 端口定位为付费官方 API；是否把反代额度也纳入调度，由“Plus 端口访问 free”开关控制。
+		return h.store.GetPlusPortAccessFree(), true
+	default:
+		return true, true
+	}
+}
+
+func (h *Handler) writeNoAvailableImageRoute(c *gin.Context, message string) {
+	if strings.TrimSpace(message) == "" {
+		message = "无可用图片账号，请稍后重试"
+	}
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": gin.H{"message": message, "type": "server_error"},
+	})
+}
+
+func (h *Handler) forwardOfficialImagesOrFallback(c *gin.Context, endpoint, imageModel string, responsesBody []byte, responseFormat, streamPrefix string, stream bool, state *webImageFallbackState, officialAllowed bool) {
+	if !officialAllowed {
+		if h.writeWebFallbackState(c, state) {
+			return
+		}
+		h.writeNoAvailableImageRoute(c, "当前端口仅允许使用图片反代额度，且没有可用反代图片账号")
+		return
+	}
+	if state != nil && !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
+		return
+	}
+	h.forwardImagesRequestWithMatcher(c, endpoint, imageModel, responsesBody, responseFormat, streamPrefix, stream, officialImageAccountMatcher)
+}
+
 func (h *Handler) ImagesGenerations(c *gin.Context) {
 	rawBody, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -180,21 +223,25 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, nil, tool)
-	if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
-		InboundEndpoint: "/v1/images/generations",
-		RequestModel:    imageModel,
-		Prompt:          prompt,
-		ResponseFormat:  responseFormat,
-		StreamPrefix:    "image_generation",
-		Stream:          stream,
-		N:               int(n),
-		ResponsesBody:   responsesBody,
-	}); handled {
-		return
-	} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
-		return
+	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
+	var state *webImageFallbackState
+	if webAllowed {
+		if handled, webState := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+			InboundEndpoint: "/v1/images/generations",
+			RequestModel:    imageModel,
+			Prompt:          prompt,
+			ResponseFormat:  responseFormat,
+			StreamPrefix:    "image_generation",
+			Stream:          stream,
+			N:               int(n),
+			ResponsesBody:   responsesBody,
+		}); handled {
+			return
+		} else {
+			state = webState
+		}
 	}
-	h.forwardImagesRequestWithMatcher(c, "/v1/images/generations", imageModel, responsesBody, responseFormat, "image_generation", stream, officialImageAccountMatcher)
+	h.forwardOfficialImagesOrFallback(c, "/v1/images/generations", imageModel, responsesBody, responseFormat, "image_generation", stream, state, officialAllowed)
 }
 
 func (h *Handler) ImagesEdits(c *gin.Context) {
@@ -281,7 +328,9 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 
 	tool := buildImagesEditToolFromForm(c, imageModel, maskDataURL)
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	if strings.TrimSpace(maskDataURL) == "" {
+	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
+	var state *webImageFallbackState
+	if webAllowed && strings.TrimSpace(maskDataURL) == "" {
 		refs := make([]webimage.ReferenceImage, 0, len(imageFiles))
 		for _, fileHeader := range imageFiles {
 			ref, refErr := multipartFileHeaderToReferenceImage(fileHeader)
@@ -292,7 +341,7 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 			refs = append(refs, ref)
 		}
 		if len(refs) == len(imageFiles) && len(refs) > 0 {
-			if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+			if handled, webState := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
 				InboundEndpoint: "/v1/images/edits",
 				RequestModel:    imageModel,
 				Prompt:          prompt,
@@ -304,12 +353,12 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 				ResponsesBody:   responsesBody,
 			}); handled {
 				return
-			} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
-				return
+			} else {
+				state = webState
 			}
 		}
 	}
-	h.forwardImagesRequestWithMatcher(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, officialImageAccountMatcher)
+	h.forwardOfficialImagesOrFallback(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, state, officialAllowed)
 }
 
 func buildImagesEditToolFromForm(c *gin.Context, imageModel, maskDataURL string) []byte {
@@ -414,9 +463,11 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	if maskDataURL == "" {
+	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
+	var state *webImageFallbackState
+	if webAllowed && maskDataURL == "" {
 		if refs, refErr := webReferencesFromImageURLs(images); refErr == nil && len(refs) > 0 {
-			if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+			if handled, webState := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
 				InboundEndpoint: "/v1/images/edits",
 				RequestModel:    imageModel,
 				Prompt:          prompt,
@@ -428,12 +479,12 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 				ResponsesBody:   responsesBody,
 			}); handled {
 				return
-			} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
-				return
+			} else {
+				state = webState
 			}
 		}
 	}
-	h.forwardImagesRequestWithMatcher(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, officialImageAccountMatcher)
+	h.forwardOfficialImagesOrFallback(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, state, officialAllowed)
 }
 
 func buildImagesResponsesRequest(prompt string, images []string, toolJSON []byte) []byte {
@@ -736,9 +787,23 @@ func writeChatCompletionsImageStream(c *gin.Context, model, chunkID string, crea
 }
 
 func (h *Handler) handleChatCompletionsImageFallback(c *gin.Context, rawBody []byte, model string) {
-	if handled, state := h.tryHandleWebChatCompletionsImageRequest(c, rawBody, model); handled {
+	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
+	var state *webImageFallbackState
+	if webAllowed {
+		if handled, webState := h.tryHandleWebChatCompletionsImageRequest(c, rawBody, model); handled {
+			return
+		} else {
+			state = webState
+		}
+	}
+	if !officialAllowed {
+		if h.writeWebFallbackState(c, state) {
+			return
+		}
+		h.writeNoAvailableImageRoute(c, "当前端口仅允许使用图片反代额度，且当前请求无法通过反代处理")
 		return
-	} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
+	}
+	if state != nil && !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
 		return
 	}
 	h.handleChatCompletionsImageFallbackWithMatcher(c, rawBody, model, officialImageAccountMatcher)

@@ -331,7 +331,11 @@ func (a *Account) imageQuotaExhaustedLocked(now time.Time) (exhausted bool, know
 
 	officialKnown := a.ImageOfficialKnown
 	officialAvailable := a.ImageOfficialAvailable
-	if NormalizePlanType(a.PlanType) == "free" {
+	if a.textQuotaFullLocked(now) {
+		// 官方 API 图片生成消耗账号文本/Codex 总额度；文本额度已满时，官方图片也不可用。
+		officialKnown = true
+		officialAvailable = 0
+	} else if NormalizePlanType(a.PlanType) == "free" {
 		// free 官方图片次数按 0 处理；网页反代额度单独统计。
 		officialKnown = true
 		officialAvailable = 0

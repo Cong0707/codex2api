@@ -251,15 +251,12 @@ function calcImageQuotaStats(accounts: AccountRow[]): ImageQuotaStats {
     const plan = (account.plan_type || '').toLowerCase()
     const webTotal = safeImageCount(account.image_web_total)
     const webRemaining = safeImageCount(account.image_web_remaining)
-    // 官方 API 计数未知（前端显示为 ? / null / undefined）时按 0 统计。
-    const officialAvailable = safeImageCount(account.image_official_available)
-
     if (plan === 'free') {
       freeImageTotal += webTotal
       remainingImageTotal += webRemaining
     } else {
-      paidImageTotal += webTotal + officialAvailable
-      remainingImageTotal += webRemaining + officialAvailable
+      paidImageTotal += webTotal
+      remainingImageTotal += webRemaining
     }
   }
 
@@ -2546,20 +2543,15 @@ function UsageBar({ label, pct, resetAt }: { label: string; pct: number; resetAt
 function ImageQuotaBar({
   remaining,
   total,
-  official,
 }: {
   remaining?: number | null
   total?: number | null
-  official?: number | null
 }) {
   const hasQuota = remaining !== null && remaining !== undefined && total !== null && total !== undefined
   const safeRemaining = Math.max(0, Number(remaining ?? 0))
   const safeTotal = Math.max(0, Number(total ?? 0))
-  const hasOfficial = official !== null && official !== undefined
-  const safeOfficial = hasOfficial ? Math.max(0, Number(official ?? 0)) : null
   const pct = hasQuota && safeTotal > 0 ? Math.max(0, Math.min(100, (safeRemaining / safeTotal) * 100)) : 0
-  const officialText = safeOfficial === null ? '?' : `${safeOfficial}`
-  const text = hasQuota ? `${safeRemaining}/${safeTotal}+${officialText}` : `-/-+${officialText}`
+  const text = hasQuota ? `${safeRemaining}/${safeTotal}` : '-/-'
   return (
     <div>
       <div className="flex items-center gap-1.5">
@@ -2594,7 +2586,6 @@ function UsageCell({ account, t }: { account: AccountRow; t: (key: string, optio
       <ImageQuotaBar
         remaining={hasImageWebRemaining ? account.image_web_remaining : null}
         total={hasImageWebTotal ? account.image_web_total : null}
-        official={account.image_official_available}
       />
     </div>
   )
