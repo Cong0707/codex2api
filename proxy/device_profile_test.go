@@ -27,6 +27,14 @@ func TestParseCodexCLIVersion(t *testing.T) {
 			wantOK:    true,
 		},
 		{
+			name:      "valid codex-tui version",
+			ua:        "codex-tui/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.118.0)",
+			wantMajor: 0,
+			wantMinor: 118,
+			wantPatch: 0,
+			wantOK:    true,
+		},
+		{
 			name:      "valid codex_cli_rs version with different numbers",
 			ua:        "codex_cli_rs/1.2.3",
 			wantMajor: 1,
@@ -315,10 +323,15 @@ func TestExtractDeviceProfile(t *testing.T) {
 			wantOK:  false,
 		},
 		{
-			name:    "valid codex headers",
-			headers: http.Header{"User-Agent": []string{"codex_cli_rs/0.118.0 (Ubuntu 24.04; x86_64)"}},
+			name:    "valid codex-tui headers",
+			headers: http.Header{"User-Agent": []string{"codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)"}},
 			wantOK:  true,
-			wantUA:  "codex_cli_rs/0.118.0 (Ubuntu 24.04; x86_64)",
+			wantUA:  "codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)",
+		},
+		{
+			name:    "legacy codex cli headers are ignored",
+			headers: http.Header{"User-Agent": []string{"codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"}},
+			wantOK:  false,
 		},
 		{
 			name:    "invalid user agent",
@@ -348,34 +361,34 @@ func TestExtractDeviceProfile(t *testing.T) {
 
 func TestDeviceProfileScopeKey(t *testing.T) {
 	tests := []struct {
-		name   string
+		name    string
 		account *auth.Account
-		apiKey string
-		want   string
+		apiKey  string
+		want    string
 	}{
 		{
-			name:   "nil account, empty api key",
+			name:    "nil account, empty api key",
 			account: nil,
-			apiKey: "",
-			want:   "global",
+			apiKey:  "",
+			want:    "global",
 		},
 		{
-			name:   "nil account, with api key",
+			name:    "nil account, with api key",
 			account: nil,
-			apiKey: "sk-test123",
-			want:   "api_key:sk-test123",
+			apiKey:  "sk-test123",
+			want:    "api_key:sk-test123",
 		},
 		{
-			name:   "with account, empty api key",
+			name:    "with account, empty api key",
 			account: &auth.Account{},
-			apiKey: "",
-			want:   "global",
+			apiKey:  "",
+			want:    "global",
 		},
 		{
-			name:   "api key takes priority over account",
+			name:    "api key takes priority over account",
 			account: &auth.Account{}, // account.ID() == 0
-			apiKey: "sk-priority",
-			want:   "api_key:sk-priority",
+			apiKey:  "sk-priority",
+			want:    "api_key:sk-priority",
 		},
 	}
 
@@ -502,13 +515,13 @@ func TestResolveDeviceProfile(t *testing.T) {
 	// 测试 3: 有效的客户端 headers 会被缓存
 	t.Run("valid client headers are cached", func(t *testing.T) {
 		headers := http.Header{
-			"User-Agent": []string{"codex_cli_rs/0.118.0 (Ubuntu 24.04; x86_64)"},
+			"User-Agent": []string{"codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)"},
 		}
 		profile1 := ResolveDeviceProfile(nil, "test-api-key", headers, cfg)
 
 		// 验证版本被正确提取
-		if !profile1.HasVersion || profile1.Version.minor != 118 {
-			t.Errorf("Expected version 0.118.0, got %+v", profile1.Version)
+		if !profile1.HasVersion || profile1.Version.minor != 120 {
+			t.Errorf("Expected version 0.120.0, got %+v", profile1.Version)
 		}
 
 		// 第二次调用应该返回缓存的值
@@ -521,7 +534,7 @@ func TestResolveDeviceProfile(t *testing.T) {
 	// 测试 4: 不同 API key 应该有不同的缓存
 	t.Run("different api keys have different cache", func(t *testing.T) {
 		headers := http.Header{
-			"User-Agent": []string{"codex_cli_rs/0.118.0 (Ubuntu 24.04; x86_64)"},
+			"User-Agent": []string{"codex-tui/0.120.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.120.0)"},
 		}
 		profile1 := ResolveDeviceProfile(nil, "key1", headers, cfg)
 		profile2 := ResolveDeviceProfile(nil, "key2", headers, cfg)
@@ -653,10 +666,10 @@ func TestMapStainlessOS(t *testing.T) {
 
 	// 验证已知映射
 	validOS := map[string]bool{
-		"MacOS":        true,
-		"Windows":      true,
-		"Linux":        true,
-		"FreeBSD":      true,
+		"MacOS":   true,
+		"Windows": true,
+		"Linux":   true,
+		"FreeBSD": true,
 	}
 
 	// 如果不是已知值，应该以 "Other::" 开头
@@ -674,9 +687,9 @@ func TestMapStainlessArch(t *testing.T) {
 
 	// 验证已知映射
 	validArch := map[string]bool{
-		"x64":  true,
+		"x64":   true,
 		"arm64": true,
-		"x86":  true,
+		"x86":   true,
 	}
 
 	// 如果不是已知值，应该以 "other::" 开头

@@ -45,8 +45,9 @@ func resolveCodexRequestIdentity(account *auth.Account, apiKey string, downstrea
 		return identity
 	}
 
-	// 非稳定化模式：如果下游本身就是 Codex CLI，优先复用其 UA/Version。
-	if ua := strings.TrimSpace(downstreamHeaders.Get("User-Agent")); ua != "" && isCodexCodeClient(ua) {
+	// 非稳定化模式：仅在下游已经是足够新的 codex-tui 指纹时才透传，
+	// 避免旧 codex_cli_rs / 旧版本导致 gpt-5.5 被上游拒绝。
+	if ua := strings.TrimSpace(downstreamHeaders.Get("User-Agent")); shouldPassThroughCodexUserAgent(ua) {
 		if v, ok := parseCodexCLIVersion(ua); ok {
 			return codexRequestIdentity{
 				UserAgent: ua,

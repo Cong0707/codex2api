@@ -152,7 +152,7 @@ func newProxyAwareTransport(proxyURL string) *http.Transport {
 // Codex 上游常量
 const (
 	CodexBaseURL = "https://chatgpt.com/backend-api/codex"
-	Originator   = "codex_cli_rs"
+	Originator   = StableCodexOriginator
 )
 
 var WebsocketExecuteFunc func(
@@ -434,6 +434,7 @@ func requestAPIKeyFromHeaders(headers http.Header) string {
 	}
 	return ""
 }
+
 // ResolveSessionID 从下游请求提取或生成 session ID
 // 优先级：
 //  1. Header: Session_id

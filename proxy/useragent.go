@@ -7,13 +7,9 @@ import (
 
 // ==================== 动态 User-Agent 生成 ====================
 //
-// 真实 codex_cli_rs 的 UA 格式（源码: codex-rs/login/src/auth/default_client.rs）：
-//   {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
-//
-// 示例：
-//   codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464
-//   codex_cli_rs/0.124.0 (Mac OS 15.1.0; arm64) Ghostty/1.2.3
-//   codex_cli_rs/0.124.0 (Windows 10.0.26120; x86_64) WindowsTerminal
+// 当前 Codex 官方链路已经切到 codex-tui 指纹，gpt-5.5 等新模型会校验
+// 客户端版本。这里默认对齐 CLIProxyAPI 最新上游的稳定指纹，避免继续
+// 透传过旧的 codex_cli_rs 指纹导致 “requires a newer version of Codex”。
 
 // ClientProfile 表示一个模拟客户端的完整身份
 type ClientProfile struct {
@@ -22,9 +18,10 @@ type ClientProfile struct {
 }
 
 const (
-	// StableCodexUserAgent 对齐 CLIProxyAPI 的 Codex 默认指纹。
-	StableCodexUserAgent = "codex_cli_rs/0.116.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
-	StableCodexVersion   = "0.116.0"
+	// StableCodexUserAgent 对齐 CLIProxyAPI 最新 Codex 默认指纹。
+	StableCodexUserAgent  = "codex-tui/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.118.0)"
+	StableCodexVersion    = "0.118.0"
+	StableCodexOriginator = "codex-tui"
 )
 
 // StableCodexClientProfile 返回稳定的 Codex 客户端画像。
@@ -35,34 +32,11 @@ func StableCodexClientProfile() ClientProfile {
 	}
 }
 
-// 预定义的真实客户端画像池
-// 按开发者常见环境分布：macOS（主力） > Linux > Windows
+// 预定义客户端画像池。
+// 目前 Codex 请求链路统一固定到稳定 codex-tui 指纹，避免账号池内混入旧
+// codex_cli_rs 标识造成新版模型校验失败。
 var clientProfiles = []ClientProfile{
-	// ---- macOS arm64（最常见：Apple Silicon 开发者） ----
-	{"codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 15.4.1; arm64) Ghostty/1.2.3", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 15.3.0; arm64) iTerm.app/3.5.10", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) kitty/0.40.0", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 15.2.0; arm64) WezTerm/20250101", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) vscode/1.100.0", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 15.4.0; arm64) tmux/3.5a", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 14.7.4; arm64) Alacritty/0.15.1", "0.124.0"},
-	// ---- macOS x86_64（少量 Intel Mac） ----
-	{"codex_cli_rs/0.124.0 (Mac OS 15.4.0; x86_64) Apple_Terminal/464", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Mac OS 14.7.0; x86_64) iTerm.app/3.5.8", "0.124.0"},
-	// ---- Linux（服务器和开发工作站） ----
-	{"codex_cli_rs/0.124.0 (Ubuntu 24.04; x86_64) kitty/0.35.2", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Ubuntu 24.10; x86_64) Alacritty/0.14.0", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Arch Linux Rolling; x86_64) kitty/0.40.0", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Fedora Linux 41; x86_64) vscode/1.100.0", "0.124.0"},
-	// ---- Windows ----
-	{"codex_cli_rs/0.124.0 (Windows 10.0.26120; x86_64) WindowsTerminal", "0.124.0"},
-	{"codex_cli_rs/0.124.0 (Windows 10.0.22631; x86_64) WindowsTerminal", "0.124.0"},
-	// ---- 稍旧的版本（少量用户未及时更新） ----
-	{"codex_cli_rs/0.123.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464", "0.123.0"},
-	{"codex_cli_rs/0.123.0 (Mac OS 15.3.0; arm64) Ghostty/1.1.0", "0.123.0"},
-	{"codex_cli_rs/0.123.0 (Mac OS 15.4.0; arm64) vscode/1.98.0", "0.123.0"},
-	{"codex_cli_rs/0.123.0 (Ubuntu 24.04; x86_64) Alacritty/0.14.0", "0.123.0"},
+	StableCodexClientProfile(),
 }
 
 // ProfileForAccount 根据账号 ID 确定性地选择一个 ClientProfile
@@ -70,8 +44,8 @@ var clientProfiles = []ClientProfile{
 func ProfileForAccount(accountID int64) ClientProfile {
 	if len(clientProfiles) == 0 {
 		return ClientProfile{
-			UserAgent: "codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464",
-			Version:   "0.124.0",
+			UserAgent: StableCodexUserAgent,
+			Version:   StableCodexVersion,
 		}
 	}
 

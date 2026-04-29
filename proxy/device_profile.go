@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	defaultDeviceProfileUserAgent      = "codex_cli_rs/0.124.0 (Mac OS 15.5.0; arm64) Apple_Terminal/464"
-	defaultDeviceProfilePackageVersion = "0.124.0"
-	defaultDeviceProfileRuntimeVersion = "0.124.0"
+	defaultDeviceProfileUserAgent      = StableCodexUserAgent
+	defaultDeviceProfilePackageVersion = StableCodexVersion
+	defaultDeviceProfileRuntimeVersion = StableCodexVersion
 	defaultDeviceProfileOS             = "MacOS"
 	defaultDeviceProfileArch           = "arm64"
 	deviceProfileTTL                   = 7 * 24 * time.Hour
@@ -25,7 +25,8 @@ const (
 )
 
 var (
-	codexCLIVersionPattern = regexp.MustCompile(`^codex_cli_rs/(\d+)\.(\d+)\.(\d+)`)
+	codexCLIVersionPattern = regexp.MustCompile(`^(?:codex_cli_rs|codex-tui)/(\d+)\.(\d+)\.(\d+)`)
+	stableCodexCLIVersion  = mustParseStableCodexVersion()
 
 	deviceProfileCache            = make(map[string]deviceProfileCacheEntry)
 	deviceProfileCacheMu          sync.RWMutex
@@ -52,9 +53,9 @@ func DefaultDeviceProfileConfig() *DeviceProfileConfig {
 		PackageVersion:         stable.Version,
 		RuntimeVersion:         stable.Version,
 		OS:                     defaultDeviceProfileOS,
-			Arch:                   defaultDeviceProfileArch,
-			StabilizeDeviceProfile: true,
-		}
+		Arch:                   defaultDeviceProfileArch,
+		StabilizeDeviceProfile: true,
+	}
 }
 
 // DeviceProfileConfigFromEnv 从环境变量读取 Codex 画像与 Beta 配置。
@@ -217,6 +218,29 @@ func parseCodexCLIVersion(userAgent string) (cliVersion, bool) {
 	return cliVersion{major: major, minor: minor, patch: patch}, true
 }
 
+func mustParseStableCodexVersion() cliVersion {
+	version, ok := parseCodexCLIVersion(StableCodexUserAgent)
+	if !ok {
+		return cliVersion{}
+	}
+	return version
+}
+
+func isCodexTUIUserAgent(userAgent string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(userAgent)), "codex-tui/")
+}
+
+func shouldPassThroughCodexUserAgent(userAgent string) bool {
+	if !isCodexTUIUserAgent(userAgent) {
+		return false
+	}
+	version, ok := parseCodexCLIVersion(userAgent)
+	if !ok {
+		return false
+	}
+	return version.Compare(stableCodexCLIVersion) >= 0
+}
+
 func shouldUpgradeDeviceProfile(candidate, current deviceProfile) bool {
 	if candidate.UserAgent == "" || !candidate.HasVersion {
 		return false
@@ -253,6 +277,9 @@ func extractDeviceProfile(headers http.Header, cfg *DeviceProfileConfig) (device
 	}
 
 	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
+	if !shouldPassThroughCodexUserAgent(userAgent) {
+		return deviceProfile{}, false
+	}
 	version, ok := parseCodexCLIVersion(userAgent)
 	if !ok {
 		return deviceProfile{}, false
