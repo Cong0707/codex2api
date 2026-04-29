@@ -115,6 +115,14 @@ type QuotaStatsWindowed = {
   waiting7dCount: number
 }
 
+type ImageQuotaStats = {
+  freeImageTotal: number
+  paidImageTotal: number
+  totalImageTotal: number
+  remainingImageTotal: number
+  remainingImagePercent: number
+}
+
 function normalizeRate(value: number, fallback: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return fallback
@@ -227,6 +235,44 @@ function calcWindowedQuotaStats(accounts: AccountRow[], rates: QuotaRateConfig):
   }
 }
 
+function safeImageCount(value?: number | null): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return 0
+  }
+  return value
+}
+
+function calcImageQuotaStats(accounts: AccountRow[]): ImageQuotaStats {
+  let freeImageTotal = 0
+  let paidImageTotal = 0
+  let remainingImageTotal = 0
+
+  for (const account of accounts) {
+    const plan = (account.plan_type || '').toLowerCase()
+    const webTotal = safeImageCount(account.image_web_total)
+    const webRemaining = safeImageCount(account.image_web_remaining)
+    // 官方 API 计数未知（前端显示为 ? / null / undefined）时按 0 统计。
+    const officialAvailable = safeImageCount(account.image_official_available)
+
+    if (plan === 'free') {
+      freeImageTotal += webTotal
+      remainingImageTotal += webRemaining
+    } else {
+      paidImageTotal += webTotal + officialAvailable
+      remainingImageTotal += webRemaining + officialAvailable
+    }
+  }
+
+  const totalImageTotal = freeImageTotal + paidImageTotal
+  return {
+    freeImageTotal,
+    paidImageTotal,
+    totalImageTotal,
+    remainingImageTotal,
+    remainingImagePercent: totalImageTotal > 0 ? roundTo2((remainingImageTotal / totalImageTotal) * 100) : 0,
+  }
+}
+
 function formatMetric(value: number, fractionDigits = 2): string {
   if (!Number.isFinite(value)) return '0'
   return value.toLocaleString(undefined, {
@@ -249,7 +295,7 @@ export default function Accounts() {
   const [showAdd, setShowAdd] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(PAGE_SIZE_MIN)
-  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'rate_limited' | 'full_usage' | 'banned' | 'locked'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'rate_limited' | 'full_usage' | 'image_only' | 'text_only' | 'banned' | 'locked'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [planFilter, setPlanFilter] = useState<'all' | 'plus' | 'pro' | 'team' | 'free'>('all')
   const [sortKey, setSortKey] = useState<'requests' | 'usage' | 'importTime' | null>(null)
@@ -373,6 +419,8 @@ export default function Accounts() {
   const normalAccounts = accounts.filter((account) => account.status === 'active' || account.status === 'ready').length
   const rateLimitedAccounts = accounts.filter((account) => account.status === 'rate_limited').length
   const fullUsageAccounts = accounts.filter((account) => account.status === 'full_usage').length
+  const imageOnlyAccounts = accounts.filter((account) => account.status === 'image_only').length
+  const textOnlyAccounts = accounts.filter((account) => account.status === 'text_only').length
   const bannedAccounts = accounts.filter((account) => account.status === 'unauthorized').length
   const lockedAccounts = accounts.filter((account) => account.locked).length
   const healthyAccounts = accounts.filter((account) => account.health_tier === 'healthy').length
@@ -383,6 +431,7 @@ export default function Accounts() {
   const paidQuotaAccounts = quotaSourceAccounts.filter((account) => (account.plan_type || '').toLowerCase() !== 'free')
   const freeQuotaStats = calcFreeQuotaStats(freeQuotaAccounts, quotaRates)
   const paidQuotaStats = calcWindowedQuotaStats(paidQuotaAccounts, quotaRates)
+  const imageQuotaStats = calcImageQuotaStats(quotaSourceAccounts)
   const totalQuota = calcWeightedTotal(quotaSourceAccounts, quotaRates)
   const totalUsed5h = calcWeightedUsed5hEffective(quotaSourceAccounts, quotaRates)
   const totalUsed7d = calcWeightedUsed(quotaSourceAccounts, quotaRates, 'usage_percent_7d')
@@ -418,6 +467,12 @@ export default function Accounts() {
         break
       case 'full_usage':
         if (account.status !== 'full_usage') return false
+        break
+      case 'image_only':
+        if (account.status !== 'image_only') return false
+        break
+      case 'text_only':
+        if (account.status !== 'text_only') return false
         break
       case 'banned':
         if (account.status !== 'unauthorized') return false
@@ -1217,7 +1272,18 @@ export default function Accounts() {
           <CompactStat label={t('accounts.normalAccounts')} chipLabel={t('accounts.filterNormal')} value={normalAccounts} tone="success" />
           <CompactStat label={t('accounts.rateLimited')} chipLabel={t('accounts.filterRateLimited')} value={rateLimitedAccounts} tone="warning" />
           <CompactStat label={t('accounts.fullUsageAccounts')} chipLabel={t('accounts.filterFullUsage')} value={fullUsageAccounts} tone="warning" />
+          <CompactStat label={t('accounts.imageOnlyAccounts')} chipLabel={t('accounts.filterImageOnly')} value={imageOnlyAccounts} tone="cyan" />
+          <CompactStat label={t('accounts.textOnlyAccounts')} chipLabel={t('accounts.filterTextOnly')} value={textOnlyAccounts} tone="success" />
           <CompactStat label={t('accounts.bannedAccounts')} chipLabel={t('accounts.filterBanned')} value={bannedAccounts} tone="danger" />
+        </div>
+
+        <div className="mb-2 text-[12px] font-semibold text-muted-foreground">{t('accounts.imageQuotaSectionTitle')}</div>
+        <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-5">
+          <CompactStat label={t('accounts.freeImageCount')} value={formatMetric(imageQuotaStats.freeImageTotal, 0)} tone="neutral" />
+          <CompactStat label={t('accounts.paidImageCount')} value={formatMetric(imageQuotaStats.paidImageTotal, 0)} tone="neutral" />
+          <CompactStat label={t('accounts.totalImageCount')} value={formatMetric(imageQuotaStats.totalImageTotal, 0)} tone="success" />
+          <CompactStat label={t('accounts.remainingImageCount')} value={formatMetric(imageQuotaStats.remainingImageTotal, 0)} tone="cyan" />
+          <CompactStat label={t('accounts.remainingImagePercent')} value={`${imageQuotaStats.remainingImagePercent.toFixed(2)}%`} tone="cyan" />
         </div>
 
         <div className="mb-2 text-[12px] font-semibold text-muted-foreground">{t('accounts.quotaSectionFreeTitle')}</div>
@@ -1259,7 +1325,16 @@ export default function Accounts() {
 
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-white/55 px-4 py-3 text-[12px] text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]">
           <span className="font-semibold text-foreground">{t('accounts.filter')}</span>
-          {([['all', t('accounts.filterAll')], ['normal', t('accounts.filterNormal')], ['rate_limited', t('accounts.filterRateLimited')], ['full_usage', t('accounts.filterFullUsage')], ['banned', t('accounts.filterBanned')], ['locked', t('accounts.filterLocked')]] as const).map(([key, label]) => (
+          {([
+            ['all', t('accounts.filterAll'), totalAccounts],
+            ['normal', t('accounts.filterNormal'), normalAccounts],
+            ['rate_limited', t('accounts.filterRateLimited'), rateLimitedAccounts],
+            ['full_usage', t('accounts.filterFullUsage'), fullUsageAccounts],
+            ['image_only', t('accounts.filterImageOnly'), imageOnlyAccounts],
+            ['text_only', t('accounts.filterTextOnly'), textOnlyAccounts],
+            ['banned', t('accounts.filterBanned'), bannedAccounts],
+            ['locked', t('accounts.filterLocked'), lockedAccounts],
+          ] as const).map(([key, label, count]) => (
             <button
               key={key}
               onClick={() => { setStatusFilter(key); setPage(1) }}
@@ -1269,7 +1344,7 @@ export default function Accounts() {
                   : 'bg-muted/50 text-muted-foreground hover:bg-muted'
               }`}
             >
-              {label} {key === 'all' ? totalAccounts : key === 'normal' ? normalAccounts : key === 'rate_limited' ? rateLimitedAccounts : key === 'full_usage' ? fullUsageAccounts : key === 'banned' ? bannedAccounts : lockedAccounts}
+              {label} {count}
             </button>
           ))}
         </div>

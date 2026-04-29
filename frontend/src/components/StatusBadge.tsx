@@ -11,6 +11,8 @@ const statusConfig: Record<string, { variant: 'default' | 'secondary' | 'destruc
   cooldown: { variant: 'secondary', dotColor: 'bg-amber-500' },
   rate_limited: { variant: 'secondary', dotColor: 'bg-yellow-500' },
   full_usage: { variant: 'secondary', dotColor: 'bg-amber-600' },
+  image_only: { variant: 'secondary', dotColor: 'bg-cyan-500' },
+  text_only: { variant: 'secondary', dotColor: 'bg-emerald-500' },
   unauthorized: { variant: 'destructive', dotColor: 'bg-red-500' },
   error: { variant: 'destructive', dotColor: 'bg-red-400' },
   paused: { variant: 'outline', dotColor: 'bg-blue-500' },

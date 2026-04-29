@@ -136,7 +136,7 @@ func (h *Handler) Messages(c *gin.Context) {
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		account, stickyProxyURL := h.acquireAccountForRequestWithAffinity(c, affinityKey, excludeAccounts)
 		if account == nil {
-			account, stickyProxyURL = h.store.WaitForSessionAvailable(c.Request.Context(), affinityKey, 30*time.Second, excludeAccounts, h.accountMatcherForCurrentPort(c))
+			account, stickyProxyURL = h.store.WaitForSessionAvailable(c.Request.Context(), affinityKey, 30*time.Second, excludeAccounts, mergeAccountMatchers(h.accountMatcherForCurrentPort(c), textAccountMatcher))
 			if account == nil {
 				if lastStatusCode == http.StatusTooManyRequests && len(lastBody) > 0 {
 					sendAnthropicError(c, http.StatusTooManyRequests, "rate_limit_error", "All accounts rate limited")

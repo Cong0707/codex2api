@@ -69,7 +69,7 @@ func (h *Handler) writeWebFallbackState(c *gin.Context, state *webImageFallbackS
 }
 
 func officialImageAccountMatcher(acc *auth.Account) bool {
-	if acc == nil || !acc.IsAvailable() {
+	if acc == nil || !acc.CanAttemptImageGeneration() {
 		return false
 	}
 	if !auth.SupportsOfficialImageGeneration(acc.GetPlanType()) {
@@ -82,7 +82,7 @@ func officialImageAccountMatcher(acc *auth.Account) bool {
 }
 
 func webImageAccountMatcher(acc *auth.Account) bool {
-	if acc == nil {
+	if acc == nil || !acc.CanAttemptImageGeneration() {
 		return false
 	}
 	remaining, total, resetAt, _, valid, _ := acc.GetImageQuotaSnapshot()
@@ -101,10 +101,13 @@ func webImageAccountMatcher(acc *auth.Account) bool {
 func (h *Handler) hasAvailableAccountForMatcher(c *gin.Context, extraMatcher auth.AccountMatcher) bool {
 	matcher := mergeAccountMatchers(h.accountMatcherForCurrentPort(c), extraMatcher)
 	for _, acc := range h.store.Accounts() {
-		if acc == nil || !acc.IsAvailable() {
+		if acc == nil {
 			continue
 		}
 		if matcher != nil && !matcher(acc) {
+			continue
+		}
+		if matcher == nil && !acc.IsAvailable() {
 			continue
 		}
 		return true

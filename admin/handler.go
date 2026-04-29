@@ -422,7 +422,12 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			}
 			// 使用运行时状态（优先于 DB 状态）
 			resp.Status = acc.RuntimeStatus()
-			if cooldownUntil, cooldownReason, activeCooldown := acc.GetCooldownSnapshot(); resp.Status != "unauthorized" && (activeCooldown || cooldownReason == "rate_limited") {
+			cooldownUntil, cooldownReason, activeCooldown := acc.GetCooldownSnapshot()
+			showWaitMode := resp.Status != "unauthorized" && (activeCooldown || cooldownReason == "rate_limited")
+			if cooldownReason == "full_usage" && (resp.Status == "image_only" || resp.Status == "text_only" || resp.Status == "active" || resp.Status == "ready") {
+				showWaitMode = false
+			}
+			if showWaitMode {
 				resp.WaitMode = true
 				reason := strings.TrimSpace(cooldownReason)
 				if reason == "" {

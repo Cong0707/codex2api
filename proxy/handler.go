@@ -537,8 +537,12 @@ func mergeAccountMatchers(matchers ...auth.AccountMatcher) auth.AccountMatcher {
 	}
 }
 
+func textAccountMatcher(acc *auth.Account) bool {
+	return acc != nil && acc.IsTextAvailable()
+}
+
 func (h *Handler) acquireAccountForRequestWithAffinity(c *gin.Context, affinityKey string, exclude map[int64]bool) (*auth.Account, string) {
-	return h.acquireAccountForRequestWithMatcherAndAffinity(c, affinityKey, exclude, nil)
+	return h.acquireAccountForRequestWithMatcherAndAffinity(c, affinityKey, exclude, textAccountMatcher)
 }
 
 func (h *Handler) acquireAccountForRequestWithMatcherAndAffinity(c *gin.Context, affinityKey string, exclude map[int64]bool, extraMatcher auth.AccountMatcher) (*auth.Account, string) {
