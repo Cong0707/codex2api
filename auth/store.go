@@ -2497,6 +2497,27 @@ func (s *Store) PersistImageQuotaSnapshot(acc *Account, remaining, total int, re
 	if acc == nil {
 		return
 	}
+	_, prevTotal, prevResetAt, _, prevValid, _ := acc.GetImageQuotaSnapshot()
+	if total < 0 {
+		if prevValid && prevTotal > 0 {
+			total = prevTotal
+		} else if remaining >= 0 {
+			total = remaining
+		}
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+	sameResetWindow := resetAt.IsZero() || prevResetAt.IsZero() || resetAt.Equal(prevResetAt)
+	if prevValid && sameResetWindow && prevTotal > total && remaining <= prevTotal {
+		total = prevTotal
+	}
+	if remaining > total {
+		total = remaining
+	}
 	acc.SetImageQuotaSnapshot(remaining, total, resetAt, updatedAt, officialAvailable)
 	if s.db == nil {
 		return
@@ -2524,7 +2545,16 @@ func (s *Store) DecrementImageQuotaAfterSuccess(acc *Account, delta int) {
 	if acc == nil || delta <= 0 {
 		return
 	}
-	acc.DecrementImageWebQuota(delta)
+	if _, _, _, _, valid, _ := acc.GetImageQuotaSnapshot(); !valid {
+		total := DefaultWebImageQuotaForPlan(acc.GetPlanType())
+		remaining := total - delta
+		if remaining < 0 {
+			remaining = 0
+		}
+		acc.SetImageQuotaSnapshot(remaining, total, time.Time{}, time.Now().UTC(), OfficialImageQuotaForAccount(acc))
+	} else {
+		acc.DecrementImageWebQuota(delta)
+	}
 	if s.db == nil {
 		return
 	}

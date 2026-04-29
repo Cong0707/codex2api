@@ -162,6 +162,9 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 	if n <= 0 {
 		n = 1
 	}
+	if n > 10 {
+		n = 10
+	}
 
 	tool := []byte(`{"type":"image_generation","action":"generate","model":""}`)
 	tool, _ = sjson.SetBytes(tool, "model", imageModel)
@@ -177,20 +180,19 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, nil, tool)
-	if n <= 1 {
-		if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
-			InboundEndpoint: "/v1/images/generations",
-			RequestModel:    imageModel,
-			Prompt:          prompt,
-			ResponseFormat:  responseFormat,
-			StreamPrefix:    "image_generation",
-			Stream:          stream,
-			ResponsesBody:   responsesBody,
-		}); handled {
-			return
-		} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
-			return
-		}
+	if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+		InboundEndpoint: "/v1/images/generations",
+		RequestModel:    imageModel,
+		Prompt:          prompt,
+		ResponseFormat:  responseFormat,
+		StreamPrefix:    "image_generation",
+		Stream:          stream,
+		N:               int(n),
+		ResponsesBody:   responsesBody,
+	}); handled {
+		return
+	} else if !h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) && h.writeWebFallbackState(c, state) {
+		return
 	}
 	h.forwardImagesRequestWithMatcher(c, "/v1/images/generations", imageModel, responsesBody, responseFormat, "image_generation", stream, officialImageAccountMatcher)
 }
@@ -270,10 +272,16 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 	}
 	stream := parseBoolField(c.PostForm("stream"), false)
 	n := parseIntField(c.PostForm("n"), 1)
+	if n <= 0 {
+		n = 1
+	}
+	if n > 10 {
+		n = 10
+	}
 
 	tool := buildImagesEditToolFromForm(c, imageModel, maskDataURL)
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	if n <= 1 && strings.TrimSpace(maskDataURL) == "" {
+	if strings.TrimSpace(maskDataURL) == "" {
 		refs := make([]webimage.ReferenceImage, 0, len(imageFiles))
 		for _, fileHeader := range imageFiles {
 			ref, refErr := multipartFileHeaderToReferenceImage(fileHeader)
@@ -292,6 +300,7 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 				ResponseFormat:  responseFormat,
 				StreamPrefix:    "image_edit",
 				Stream:          stream,
+				N:               int(n),
 				ResponsesBody:   responsesBody,
 			}); handled {
 				return
@@ -384,6 +393,9 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 	if n <= 0 {
 		n = 1
 	}
+	if n > 10 {
+		n = 10
+	}
 
 	tool := []byte(`{"type":"image_generation","action":"edit","model":""}`)
 	tool, _ = sjson.SetBytes(tool, "model", imageModel)
@@ -402,7 +414,7 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	if n <= 1 && maskDataURL == "" {
+	if maskDataURL == "" {
 		if refs, refErr := webReferencesFromImageURLs(images); refErr == nil && len(refs) > 0 {
 			if handled, state := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
 				InboundEndpoint: "/v1/images/edits",
@@ -412,6 +424,7 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 				ResponseFormat:  responseFormat,
 				StreamPrefix:    "image_edit",
 				Stream:          stream,
+				N:               int(n),
 				ResponsesBody:   responsesBody,
 			}); handled {
 				return

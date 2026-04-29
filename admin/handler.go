@@ -382,10 +382,10 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			if t := acc.GetReset7dAt(); !t.IsZero() {
 				resp.Reset7dAt = t.Format(time.RFC3339)
 			}
-			if remaining, total, resetAt, officialAvailable, valid, _ := acc.GetImageQuotaSnapshot(); valid {
+			if remaining, total, resetAt, _, valid, _ := acc.GetImageQuotaSnapshot(); valid {
 				remainingCopy := remaining
 				totalCopy := total
-				officialCopy := officialAvailable
+				officialCopy := auth.OfficialImageQuotaForAccount(acc)
 				resp.ImageWebRemaining = &remainingCopy
 				resp.ImageWebTotal = &totalCopy
 				resp.ImageOfficialCount = &officialCopy
@@ -393,7 +393,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 					resp.ImageWebResetAt = resetAt.Format(time.RFC3339)
 				}
 			} else {
-				officialCopy := auth.OfficialImageQuotaForPlan(resp.PlanType)
+				officialCopy := auth.OfficialImageQuotaForAccount(acc)
 				resp.ImageOfficialCount = &officialCopy
 			}
 			if t := acc.GetLastUsedAt(); !t.IsZero() {

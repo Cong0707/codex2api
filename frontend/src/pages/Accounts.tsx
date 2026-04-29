@@ -2468,6 +2468,34 @@ function UsageBar({ label, pct, resetAt }: { label: string; pct: number; resetAt
   )
 }
 
+function ImageQuotaBar({
+  remaining,
+  total,
+  official,
+}: {
+  remaining?: number | null
+  total?: number | null
+  official?: number | null
+}) {
+  const hasQuota = remaining !== null && remaining !== undefined && total !== null && total !== undefined
+  const safeRemaining = Math.max(0, Number(remaining ?? 0))
+  const safeTotal = Math.max(0, Number(total ?? 0))
+  const safeOfficial = Math.max(0, Number(official ?? 0))
+  const pct = hasQuota && safeTotal > 0 ? Math.max(0, Math.min(100, (safeRemaining / safeTotal) * 100)) : 0
+  const text = hasQuota ? `${safeRemaining}/${safeTotal}+${safeOfficial}` : `-/-+${safeOfficial}`
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-medium text-muted-foreground w-8 shrink-0">image</span>
+        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden min-w-[72px]">
+          <div className="h-full rounded-full transition-all bg-sky-500" style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-[12px] font-semibold w-[64px] text-right shrink-0">{text}</span>
+      </div>
+    </div>
+  )
+}
+
 // 用量列组件
 function UsageCell({ account, t }: { account: AccountRow; t: (key: string, options?: Record<string, unknown>) => string }) {
   const plan = (account.plan_type || '').toLowerCase()
@@ -2482,29 +2510,15 @@ function UsageCell({ account, t }: { account: AccountRow; t: (key: string, optio
       })
     : t('accounts.uploadSourceAdmin')
 
-  const renderImageQuota = () => {
-    const official = account.image_official_available ?? 0
-    if (!hasImageWebRemaining || !hasImageWebTotal) {
-      return (
-        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-          <span className="font-medium">image</span>
-          <span>{`-/-+${official}`}</span>
-        </div>
-      )
-    }
-    return (
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-        <span className="font-medium">image</span>
-        <span>{`${account.image_web_remaining}/${account.image_web_total}+${official}`}</span>
-      </div>
-    )
-  }
-
   const wrap = (content: ReactNode, widthClass: string) => (
     <div className={`${widthClass} space-y-1`}>
       <div className="text-[11px] text-muted-foreground">{uploaderText}</div>
       {content}
-      {renderImageQuota()}
+      <ImageQuotaBar
+        remaining={hasImageWebRemaining ? account.image_web_remaining : null}
+        total={hasImageWebTotal ? account.image_web_total : null}
+        official={account.image_official_available}
+      />
     </div>
   )
 

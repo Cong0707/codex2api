@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ type webImageForwardSpec struct {
 	ResponseFormat  string
 	StreamPrefix    string
 	Stream          bool
+	N               int
 	ResponsesBody   []byte
 	ReasoningEffort string
 	ServiceTier     string
@@ -43,6 +45,11 @@ type webImageAttemptPayload struct {
 	CreatedAt    int64
 	ImageCount   int
 }
+
+const (
+	defaultWebImageAttemptTimeout = 180 * time.Second
+	defaultWebImagePollMaxWait    = 90 * time.Second
+)
 
 func (h *Handler) writeWebFallbackState(c *gin.Context, state *webImageFallbackState) bool {
 	if state == nil {
@@ -62,7 +69,7 @@ func (h *Handler) writeWebFallbackState(c *gin.Context, state *webImageFallbackS
 }
 
 func officialImageAccountMatcher(acc *auth.Account) bool {
-	return acc != nil && auth.OfficialImageQuotaForPlan(acc.GetPlanType()) > 0
+	return auth.OfficialImageQuotaForAccount(acc) > 0
 }
 
 func webImageAccountMatcher(acc *auth.Account) bool {
@@ -173,10 +180,13 @@ func (h *Handler) executeWebImageAttempt(c *gin.Context, account *auth.Account, 
 	if err != nil {
 		return nil, err
 	}
-	result, err := client.Generate(c.Request.Context(), webimage.GenerateRequest{
+	ctx, cancel := context.WithTimeout(c.Request.Context(), defaultWebImageAttemptTimeout)
+	defer cancel()
+	result, err := client.Generate(ctx, webimage.GenerateRequest{
 		Prompt:          spec.Prompt,
 		ReferenceImages: spec.References,
 		UpstreamModel:   "auto",
+		PollMaxWait:     defaultWebImagePollMaxWait,
 	})
 	if err != nil {
 		return nil, err
@@ -209,9 +219,201 @@ func writeWebImagesStream(c *gin.Context, streamPrefix, responseFormat string, p
 	return firstTokenMs, nil
 }
 
+func writeWebImagesBatchStream(c *gin.Context, streamPrefix, responseFormat string, payloads []*webImageAttemptPayload) (int, error) {
+	if len(payloads) == 0 {
+		return 0, fmt.Errorf("web image payload is empty")
+	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		return 0, fmt.Errorf("streaming not supported")
+	}
+	firstTokenMs := int(time.Since(requestStartTime(c)).Milliseconds())
+	eventName := streamPrefix + ".completed"
+	for _, payload := range payloads {
+		if payload == nil {
+			continue
+		}
+		if _, err := fmt.Fprintf(c.Writer, "event: %s\n", eventName); err != nil {
+			return firstTokenMs, err
+		}
+		if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", buildImagesStreamCompletedPayload(eventName, payload.Image, responseFormat, payload.CreatedAt, nil)); err != nil {
+			return firstTokenMs, err
+		}
+		flusher.Flush()
+	}
+	return firstTokenMs, nil
+}
+
+func buildWebImagesBatchPayload(payloads []*webImageAttemptPayload, responseFormat string) ([]byte, int, error) {
+	results := make([]imageCallResult, 0, len(payloads))
+	createdAt := time.Now().Unix()
+	firstMeta := imageCallResult{}
+	for _, payload := range payloads {
+		if payload == nil {
+			continue
+		}
+		if createdAt <= 0 || payload.CreatedAt < createdAt {
+			createdAt = payload.CreatedAt
+		}
+		if len(results) == 0 {
+			firstMeta = payload.Image
+		}
+		results = append(results, payload.Image)
+	}
+	if len(results) == 0 {
+		return nil, 0, fmt.Errorf("web image batch result is empty")
+	}
+	out, err := buildImagesAPIResponse(results, createdAt, nil, firstMeta, responseFormat)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, len(results), nil
+}
+
+func (h *Handler) runWebImageOne(c *gin.Context, spec webImageForwardSpec, requestStartedAt time.Time, affinityKey string, excludeAccounts map[int64]bool, attemptOffset int) (*webImageAttemptPayload, *webImageFallbackState, bool) {
+	maxRetries := h.getMaxRetries()
+	state := &webImageFallbackState{}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		attemptAcquireStartedAt := time.Now()
+		account, stickyProxyURL := h.acquireAccountForRequestWithMatcherAndAffinity(c, affinityKey, excludeAccounts, webImageAccountMatcher)
+		attemptAcquireMs := int(time.Since(attemptAcquireStartedAt).Milliseconds())
+		if account == nil {
+			return nil, state, false
+		}
+
+		proxyURL := strings.TrimSpace(stickyProxyURL)
+		if proxyURL == "" {
+			proxyURL = h.store.ResolveProxyForAccount(account)
+		}
+		logRequestDispatch(c, spec.InboundEndpoint, attemptOffset+attempt+1, account, proxyURL, spec.RequestModel, spec.ReasoningEffort, attemptAcquireMs)
+
+		attemptStartedAt := time.Now()
+		payload, err := h.executeWebImageAttempt(c, account, proxyURL, spec)
+		attemptDurationMs := int(time.Since(attemptStartedAt).Milliseconds())
+		if err != nil {
+			statusCode, body := extractWebImageUpstreamError(err)
+			state.LastStatusCode = statusCode
+			state.LastBody = body
+			state.LastErr = err
+			if kind := classifyHTTPFailure(statusCode, body); kind != "" {
+				h.store.ReportRequestFailure(account, kind, time.Duration(attemptDurationMs)*time.Millisecond)
+			} else if kind := classifyTransportFailure(err); kind != "" {
+				h.store.ReportRequestFailure(account, kind, time.Duration(attemptDurationMs)*time.Millisecond)
+			}
+			if statusCode > 0 {
+				h.applyCooldown(account, statusCode, body, nil)
+			}
+			logUpstreamAttemptResult(c, spec.InboundEndpoint, attemptOffset+attempt+1, account, proxyURL, statusCode, attemptDurationMs, requestStartedAt, err.Error())
+			h.store.Release(account)
+			h.store.UnbindSessionAffinity(affinityKey, account.ID())
+			excludeAccounts[account.ID()] = true
+			if shouldRetryWebImageFailure(statusCode, err) && attempt < maxRetries {
+				continue
+			}
+			return nil, state, false
+		}
+
+		h.store.BindSessionAffinity(affinityKey, account, proxyURL)
+		account.Mu().RLock()
+		c.Set("x-account-email", account.Email)
+		account.Mu().RUnlock()
+		c.Set("x-account-proxy", proxyURL)
+		c.Set("x-model", spec.RequestModel)
+		if spec.ReasoningEffort != "" {
+			c.Set("x-reasoning-effort", spec.ReasoningEffort)
+		}
+
+		resolvedServiceTier := resolveServiceTier("", spec.ServiceTier)
+		if resolvedServiceTier != "" {
+			c.Set("x-service-tier", resolvedServiceTier)
+		}
+		logInput := &database.UsageLogInput{
+			AccountID:        account.ID(),
+			Endpoint:         spec.InboundEndpoint,
+			Model:            spec.RequestModel,
+			StatusCode:       http.StatusOK,
+			DurationMs:       int(time.Since(requestStartedAt).Milliseconds()),
+			FirstTokenMs:     0,
+			ReasoningEffort:  spec.ReasoningEffort,
+			InboundEndpoint:  spec.InboundEndpoint,
+			UpstreamEndpoint: "/backend-api/f/conversation",
+			Stream:           spec.Stream,
+			ServiceTier:      resolvedServiceTier,
+			CompletionTokens: payload.ImageCount,
+			OutputTokens:     payload.ImageCount,
+			TotalTokens:      payload.ImageCount,
+		}
+		h.logUsageForRequest(c, logInput)
+		logUpstreamAttemptResult(c, spec.InboundEndpoint, attemptOffset+attempt+1, account, proxyURL, http.StatusOK, attemptDurationMs, requestStartedAt, "")
+		h.store.DecrementImageQuotaAfterSuccess(account, payload.ImageCount)
+		h.store.ReportRequestSuccess(account, time.Duration(logInput.DurationMs)*time.Millisecond)
+		h.store.Release(account)
+		return payload, state, true
+	}
+
+	return nil, state, false
+}
+
+func (h *Handler) tryHandleWebImagesBatchRequest(c *gin.Context, spec webImageForwardSpec) (bool, *webImageFallbackState) {
+	if spec.N <= 1 {
+		return false, nil
+	}
+	logRequestLifecycleStartOnce(c, spec.InboundEndpoint, spec.RequestModel, spec.Stream, spec.ReasoningEffort)
+	requestStartedAt := requestStartTime(c)
+	apiKey := requestAPIKeyFromHeaders(c.Request.Header)
+	sessionID := ResolveSessionID(c.Request.Header, spec.ResponsesBody)
+	affinityKey := sessionAffinityKey(sessionID, apiKey)
+	excludeAccounts := make(map[int64]bool)
+	var lastState *webImageFallbackState
+	payloads := make([]*webImageAttemptPayload, 0, spec.N)
+
+	for i := 0; i < spec.N; i++ {
+		payload, state, ok := h.runWebImageOne(c, spec, requestStartedAt, affinityKey, excludeAccounts, i*(h.getMaxRetries()+1))
+		if !ok {
+			lastState = state
+			break
+		}
+		payloads = append(payloads, payload)
+	}
+	if len(payloads) == 0 {
+		return false, lastState
+	}
+
+	firstTokenMs := 0
+	var err error
+	if spec.Stream {
+		firstTokenMs, err = writeWebImagesBatchStream(c, spec.StreamPrefix, spec.ResponseFormat, payloads)
+	} else {
+		var out []byte
+		out, _, err = buildWebImagesBatchPayload(payloads, spec.ResponseFormat)
+		if err == nil {
+			c.Data(http.StatusOK, "application/json", out)
+		}
+	}
+	if err != nil {
+		return false, &webImageFallbackState{LastErr: err}
+	}
+	if firstTokenMs > 0 {
+		c.Set("x-first-token-ms", firstTokenMs)
+	}
+	return true, lastState
+}
+
 func (h *Handler) tryHandleWebImagesRequest(c *gin.Context, spec webImageForwardSpec) (bool, *webImageFallbackState) {
 	if h == nil || h.store == nil {
 		return false, nil
+	}
+	if spec.N <= 0 {
+		spec.N = 1
+	}
+	if spec.N > 1 {
+		return h.tryHandleWebImagesBatchRequest(c, spec)
 	}
 	logRequestLifecycleStartOnce(c, spec.InboundEndpoint, spec.RequestModel, spec.Stream, spec.ReasoningEffort)
 	requestStartedAt := requestStartTime(c)

@@ -87,6 +87,21 @@ func (c *Client) ProbeImageQuota(ctx context.Context) (*ImageQuota, error) {
 		}
 	}
 
+	// 2026-04 起部分账号的 conversation/init 只返回 image_gen.remaining，
+	// 不再携带 max_value/cap/total/limit。此时用 remaining 作为首次容量下界，
+	// 调用方会用已有快照继续保留更大的历史 total。
+	if quota.Remaining >= 0 && quota.Total < 0 {
+		quota.Total = quota.Remaining
+	}
+	if quota.Total >= 0 && quota.Remaining > quota.Total {
+		quota.Total = quota.Remaining
+	}
+	// 200 响应但没有 image_gen 条目时，视作当前不可用而不是探针失败，
+	// 避免后台对同一批账号持续刷屏重试。
+	if quota.Remaining < 0 && quota.Total < 0 {
+		quota.Remaining = 0
+		quota.Total = 0
+	}
 	if quota.Remaining < 0 || quota.Total < 0 {
 		return nil, fmt.Errorf("image quota not found in conversation/init")
 	}

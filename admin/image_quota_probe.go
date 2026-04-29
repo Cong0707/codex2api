@@ -13,7 +13,7 @@ func (h *Handler) ProbeImageQuotaSnapshot(ctx context.Context, account *auth.Acc
 		return nil
 	}
 
-	officialAvailable := auth.OfficialImageQuotaForPlan(account.GetPlanType())
+	officialAvailable := auth.OfficialImageQuotaForAccount(account)
 	proxyURL := h.store.ResolveProxyForAccount(account)
 	client, err := proxy.NewWebImageClient(account, proxyURL)
 	if err != nil {
