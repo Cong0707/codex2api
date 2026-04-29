@@ -2488,7 +2488,7 @@ function ImageQuotaBar({
       <div className="flex items-center gap-1.5">
         <span className="text-[11px] font-medium text-muted-foreground w-8 shrink-0">image</span>
         <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden min-w-[72px]">
-          <div className="h-full rounded-full transition-all bg-sky-500" style={{ width: `${pct}%` }} />
+          <div className="h-full rounded-full transition-all bg-cyan-500" style={{ width: `${pct}%` }} />
         </div>
         <span className="text-[12px] font-semibold w-[64px] text-right shrink-0">{text}</span>
       </div>

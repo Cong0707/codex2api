@@ -1,6 +1,9 @@
 package auth
 
-import "strings"
+import (
+	"math"
+	"strings"
+)
 
 var planPriority = map[string]int{
 	"":           -1,
@@ -66,8 +69,10 @@ func PreferPlanType(a, b string) string {
 // 当前仅用于前端展示与是否允许走官方兜底的快速判断。
 func OfficialImageQuotaForPlan(plan string) int {
 	switch NormalizePlanType(plan) {
-	case "plus", "pro", "team", "enterprise":
-		return 1
+	case "plus", "team":
+		return 10
+	case "pro", "enterprise":
+		return 100
 	default:
 		return 0
 	}
@@ -84,13 +89,24 @@ func OfficialImageQuotaForAccount(acc *Account) int {
 	if capacity <= 0 || !acc.IsAvailable() {
 		return 0
 	}
-	if pct7d, ok := acc.GetUsagePercent7d(); ok && pct7d >= 100 {
+	remainingPct := 100.0
+	if pct7d, ok := acc.GetUsagePercent7d(); ok {
+		remainingPct = math.Min(remainingPct, 100-math.Max(0, pct7d))
+	}
+	if pct5h, ok := acc.GetUsagePercent5h(); ok {
+		remainingPct = math.Min(remainingPct, 100-math.Max(0, pct5h))
+	}
+	if remainingPct <= 0 {
 		return 0
 	}
-	if pct5h, ok := acc.GetUsagePercent5h(); ok && pct5h >= 100 {
-		return 0
+	available := int(math.Ceil(float64(capacity) * remainingPct / 100))
+	if available < 1 {
+		return 1
 	}
-	return capacity
+	if available > capacity {
+		return capacity
+	}
+	return available
 }
 
 // DefaultWebImageQuotaForPlan 是网页反代额度无法从上游读取、但请求已成功时的兜底容量。
