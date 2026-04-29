@@ -95,6 +95,7 @@ type Account struct {
 	ImageWebResetAt        time.Time
 	ImageQuotaUpdatedAt    time.Time
 	ImageOfficialAvailable int
+	ImageOfficialKnown     bool
 
 	// 调度健康信号
 	HealthTier              AccountHealthTier
@@ -648,6 +649,7 @@ func (a *Account) SetImageQuotaSnapshot(remaining, total int, resetAt, updatedAt
 	a.ImageQuotaUpdatedAt = updatedAt
 	a.ImageWebQuotaValid = remaining >= 0 && total >= 0
 	a.ImageOfficialAvailable = officialAvailable
+	a.ImageOfficialKnown = officialAvailable >= 0
 }
 
 // GetImageQuotaSnapshot 获取网页图片额度快照。
@@ -655,6 +657,37 @@ func (a *Account) GetImageQuotaSnapshot() (remaining, total int, resetAt time.Ti
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.ImageWebRemaining, a.ImageWebTotal, a.ImageWebResetAt, a.ImageOfficialAvailable, a.ImageWebQuotaValid, a.ImageQuotaUpdatedAt
+}
+
+// SetOfficialImageAvailability 更新官方图片链路剩余次数。
+// known=false 表示当前没有任何可信的上游显式值。
+func (a *Account) SetOfficialImageAvailability(available int, known bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !known {
+		a.ImageOfficialAvailable = UnknownOfficialImageAvailability
+		a.ImageOfficialKnown = false
+		return
+	}
+	if available < 0 {
+		available = 0
+	}
+	a.ImageOfficialAvailable = available
+	a.ImageOfficialKnown = true
+}
+
+// GetOfficialImageAvailability 获取官方图片链路剩余次数。
+// 仅当上游显式给出，或已知 free 不支持时才返回 known=true。
+func (a *Account) GetOfficialImageAvailability() (available int, known bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.ImageOfficialKnown {
+		return a.ImageOfficialAvailable, true
+	}
+	if NormalizePlanType(a.PlanType) == "free" {
+		return 0, true
+	}
+	return 0, false
 }
 
 // DecrementImageWebQuota 成功生成后立刻扣减网页图片剩余额度。
@@ -1697,10 +1730,12 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 				imageUpdatedAt = parsed
 			}
 		}
-		officialAvailable := OfficialImageQuotaForPlan(account.PlanType)
-		if raw := row.GetCredential("image_official_available"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil {
-				officialAvailable = parsed
+		officialAvailable := DefaultOfficialImageAvailabilityForPlan(account.PlanType)
+		if strings.EqualFold(strings.TrimSpace(row.GetCredential("image_official_source")), "upstream") {
+			if raw := row.GetCredential("image_official_available"); raw != "" {
+				if parsed, err := strconv.Atoi(raw); err == nil {
+					officialAvailable = parsed
+				}
 			}
 		}
 		account.SetImageQuotaSnapshot(imageRemaining, imageTotal, imageResetAt, imageUpdatedAt, officialAvailable)
@@ -2540,6 +2575,29 @@ func (s *Store) PersistImageQuotaSnapshot(acc *Account, remaining, total int, re
 	}
 }
 
+// PersistOfficialImageAvailability 持久化官方图片链路剩余次数。
+// 仅在上游显式返回真实数值时调用；不会做任何本地推算。
+func (s *Store) PersistOfficialImageAvailability(acc *Account, available int) {
+	if acc == nil {
+		return
+	}
+	if available < 0 {
+		available = 0
+	}
+	acc.SetOfficialImageAvailability(available, true)
+	if s.db == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.db.UpdateCredentials(ctx, acc.DBID, map[string]interface{}{
+		"image_official_available": available,
+		"image_official_source":    "upstream",
+	}); err != nil {
+		log.Printf("[账号 %d] 持久化官方图片额度失败: %v", acc.DBID, err)
+	}
+}
+
 // DecrementImageQuotaAfterSuccess 成功生图后立刻扣减网页图片剩余额度。
 func (s *Store) DecrementImageQuotaAfterSuccess(acc *Account, delta int) {
 	if acc == nil || delta <= 0 {
@@ -2551,7 +2609,11 @@ func (s *Store) DecrementImageQuotaAfterSuccess(acc *Account, delta int) {
 		if remaining < 0 {
 			remaining = 0
 		}
-		acc.SetImageQuotaSnapshot(remaining, total, time.Time{}, time.Now().UTC(), OfficialImageQuotaForAccount(acc))
+		officialAvailable, officialKnown := acc.GetOfficialImageAvailability()
+		if !officialKnown {
+			officialAvailable = UnknownOfficialImageAvailability
+		}
+		acc.SetImageQuotaSnapshot(remaining, total, time.Time{}, time.Now().UTC(), officialAvailable)
 	} else {
 		acc.DecrementImageWebQuota(delta)
 	}

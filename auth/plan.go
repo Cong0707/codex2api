@@ -1,9 +1,6 @@
 package auth
 
-import (
-	"math"
-	"strings"
-)
+import "strings"
 
 var planPriority = map[string]int{
 	"":           -1,
@@ -65,48 +62,26 @@ func PreferPlanType(a, b string) string {
 	return pb
 }
 
-// OfficialImageQuotaForPlan 返回官方图片链路可用计数。
-// 当前仅用于前端展示与是否允许走官方兜底的快速判断。
-func OfficialImageQuotaForPlan(plan string) int {
+const UnknownOfficialImageAvailability = -1
+
+// SupportsOfficialImageGeneration 表示该套餐是否允许走官方图片链路。
+// 这里只判断“是否支持”，不推算次数；真实次数只信任上游显式返回字段。
+func SupportsOfficialImageGeneration(plan string) bool {
 	switch NormalizePlanType(plan) {
-	case "plus", "team":
-		return 10
-	case "pro", "enterprise":
-		return 100
+	case "", "free":
+		return false
 	default:
-		return 0
+		return true
 	}
 }
 
-// OfficialImageQuotaForAccount 返回当前账号在官方图片兜底链路上的动态可用次数。
-// 这里的“次数”不是上游显式图片额度，而是对 Codex 官方工具链路的可调度性判断：
-// 套餐不支持、账号冷却/封禁、5h/7d 用量已满时均显示/调度为 0。
-func OfficialImageQuotaForAccount(acc *Account) int {
-	if acc == nil {
+// DefaultOfficialImageAvailabilityForPlan 返回在没有任何上游显式额度字段时的默认值。
+// free 已知无法走官方图片链路，因此固定为 0；其它套餐一律未知（-1），不能猜。
+func DefaultOfficialImageAvailabilityForPlan(plan string) int {
+	if NormalizePlanType(plan) == "free" {
 		return 0
 	}
-	capacity := OfficialImageQuotaForPlan(acc.GetPlanType())
-	if capacity <= 0 || !acc.IsAvailable() {
-		return 0
-	}
-	remainingPct := 100.0
-	if pct7d, ok := acc.GetUsagePercent7d(); ok {
-		remainingPct = math.Min(remainingPct, 100-math.Max(0, pct7d))
-	}
-	if pct5h, ok := acc.GetUsagePercent5h(); ok {
-		remainingPct = math.Min(remainingPct, 100-math.Max(0, pct5h))
-	}
-	if remainingPct <= 0 {
-		return 0
-	}
-	available := int(math.Ceil(float64(capacity) * remainingPct / 100))
-	if available < 1 {
-		return 1
-	}
-	if available > capacity {
-		return capacity
-	}
-	return available
+	return UnknownOfficialImageAvailability
 }
 
 // DefaultWebImageQuotaForPlan 是网页反代额度无法从上游读取、但请求已成功时的兜底容量。

@@ -48,7 +48,7 @@ func TestBuildImagesResponsesRequestIncludesEditImages(t *testing.T) {
 func TestCollectImagesResponseBuildsOpenAIImagePayload(t *testing.T) {
 	upstream := `data: {"type":"response.completed","response":{"created_at":1710000000,"usage":{"input_tokens":5,"output_tokens":9},"tool_usage":{"image_gen":{"images":1}},"tools":[{"type":"image_generation","model":"gpt-image-2","output_format":"png","quality":"high","size":"1024x1024"}],"output":[{"type":"image_generation_call","result":"aGVsbG8=","revised_prompt":"draw a cat","output_format":"png"}]}}` + "\n\n"
 
-	out, usage, imageCount, err := collectImagesResponse(strings.NewReader(upstream), "b64_json", "gpt-image-2")
+	out, usage, imageCount, officialAvailable, officialKnown, err := collectImagesResponse(strings.NewReader(upstream), "b64_json", "gpt-image-2")
 	if err != nil {
 		t.Fatalf("collectImagesResponse returned error: %v", err)
 	}
@@ -66,6 +66,9 @@ func TestCollectImagesResponseBuildsOpenAIImagePayload(t *testing.T) {
 	}
 	if got := gjson.GetBytes(out, "usage.images").Int(); got != 1 {
 		t.Fatalf("usage.images = %d, want 1", got)
+	}
+	if officialKnown {
+		t.Fatalf("official availability should stay unknown for images-only usage, got %d", officialAvailable)
 	}
 }
 

@@ -69,7 +69,16 @@ func (h *Handler) writeWebFallbackState(c *gin.Context, state *webImageFallbackS
 }
 
 func officialImageAccountMatcher(acc *auth.Account) bool {
-	return auth.OfficialImageQuotaForAccount(acc) > 0
+	if acc == nil || !acc.IsAvailable() {
+		return false
+	}
+	if !auth.SupportsOfficialImageGeneration(acc.GetPlanType()) {
+		return false
+	}
+	if available, known := acc.GetOfficialImageAvailability(); known && available <= 0 {
+		return false
+	}
+	return true
 }
 
 func webImageAccountMatcher(acc *auth.Account) bool {

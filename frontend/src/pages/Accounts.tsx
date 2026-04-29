@@ -2480,9 +2480,11 @@ function ImageQuotaBar({
   const hasQuota = remaining !== null && remaining !== undefined && total !== null && total !== undefined
   const safeRemaining = Math.max(0, Number(remaining ?? 0))
   const safeTotal = Math.max(0, Number(total ?? 0))
-  const safeOfficial = Math.max(0, Number(official ?? 0))
+  const hasOfficial = official !== null && official !== undefined
+  const safeOfficial = hasOfficial ? Math.max(0, Number(official ?? 0)) : null
   const pct = hasQuota && safeTotal > 0 ? Math.max(0, Math.min(100, (safeRemaining / safeTotal) * 100)) : 0
-  const text = hasQuota ? `${safeRemaining}/${safeTotal}+${safeOfficial}` : `-/-+${safeOfficial}`
+  const officialText = safeOfficial === null ? '?' : `${safeOfficial}`
+  const text = hasQuota ? `${safeRemaining}/${safeTotal}+${officialText}` : `-/-+${officialText}`
   return (
     <div>
       <div className="flex items-center gap-1.5">

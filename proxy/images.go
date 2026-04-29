@@ -854,7 +854,7 @@ func (h *Handler) handleChatCompletionsImageFallbackWithMatcher(c *gin.Context, 
 		c.Set("x-model", model)
 		c.Set("x-reasoning-effort", reasoningEffort)
 
-		imagePayload, usage, imageCount, readErr := collectImagesResponse(resp.Body, "b64_json", model)
+		imagePayload, usage, imageCount, officialAvailable, officialKnown, readErr := collectImagesResponse(resp.Body, "b64_json", model)
 		logStatusCode := http.StatusOK
 		firstTokenMs := 0
 		if readErr != nil {
@@ -927,11 +927,17 @@ func (h *Handler) handleChatCompletionsImageFallbackWithMatcher(c *gin.Context, 
 		}
 		logUpstreamAttemptResult(c, "/v1/chat/completions", attempt+1, account, proxyURL, logStatusCode, durationMs, requestStartedAt, failureDetail)
 		h.persistUsageAndSettleFromResponse(account, resp)
+		if !officialKnown {
+			officialAvailable, officialKnown = detectOfficialImageAvailabilityFromHeaders(resp.Header)
+		}
 		resp.Body.Close()
 		if readErr != nil {
 			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			h.store.ReportRequestFailure(account, "transport", time.Duration(logInput.DurationMs)*time.Millisecond)
 		} else {
+			if officialKnown {
+				h.store.PersistOfficialImageAvailability(account, officialAvailable)
+			}
 			h.store.ReportRequestSuccess(account, time.Duration(logInput.DurationMs)*time.Millisecond)
 		}
 		h.store.Release(account)
@@ -1045,12 +1051,14 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 		var usage *UsageInfo
 		var firstTokenMs int
 		var imageCount int
+		var officialAvailable int
+		var officialKnown bool
 		var readErr error
 		if stream {
-			usage, imageCount, firstTokenMs, readErr = h.streamImagesResponse(c, resp.Body, responseFormat, streamPrefix, requestModel, start)
+			usage, imageCount, firstTokenMs, officialAvailable, officialKnown, readErr = h.streamImagesResponse(c, resp.Body, responseFormat, streamPrefix, requestModel, start)
 		} else {
 			var out []byte
-			out, usage, imageCount, readErr = collectImagesResponse(resp.Body, responseFormat, requestModel)
+			out, usage, imageCount, officialAvailable, officialKnown, readErr = collectImagesResponse(resp.Body, responseFormat, requestModel)
 			if readErr == nil {
 				c.Data(http.StatusOK, "application/json", out)
 			} else {
@@ -1096,11 +1104,17 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 		}
 		logUpstreamAttemptResult(c, inboundEndpoint, attempt+1, account, proxyURL, logStatusCode, durationMs, requestStartedAt, failureDetail)
 		h.persistUsageAndSettleFromResponse(account, resp)
+		if !officialKnown {
+			officialAvailable, officialKnown = detectOfficialImageAvailabilityFromHeaders(resp.Header)
+		}
 		resp.Body.Close()
 		if readErr != nil {
 			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			h.store.ReportRequestFailure(account, "transport", time.Duration(logInput.DurationMs)*time.Millisecond)
 		} else {
+			if officialKnown {
+				h.store.PersistOfficialImageAvailability(account, officialAvailable)
+			}
 			h.store.ReportRequestSuccess(account, time.Duration(logInput.DurationMs)*time.Millisecond)
 		}
 		h.store.Release(account)
@@ -1114,13 +1128,15 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 	}
 }
 
-func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string) ([]byte, *UsageInfo, int, error) {
+func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string) ([]byte, *UsageInfo, int, int, bool, error) {
 	var (
 		out            []byte
 		usage          *UsageInfo
 		pendingResults []imageCallResult
 		createdAt      int64
 		firstMeta      = imageCallResult{Model: fallbackModel}
+		officialKnown  bool
+		officialValue  int
 		readErr        error
 	)
 	err := ReadSSEStream(body, func(data []byte) bool {
@@ -1137,7 +1153,7 @@ func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string)
 				pendingResults = append(pendingResults, image)
 			}
 		case "response.completed":
-			results, completedAt, usageRaw, completedMeta, completedUsage, err := extractImagesFromResponsesCompleted(data, fallbackModel)
+			results, completedAt, usageRaw, completedMeta, completedUsage, completedOfficial, completedOfficialKnown, err := extractImagesFromResponsesCompleted(data, fallbackModel)
 			if err != nil {
 				readErr = err
 				return false
@@ -1148,6 +1164,10 @@ func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string)
 			mergeImageMeta(&firstMeta, completedMeta)
 			if completedUsage != nil {
 				usage = completedUsage
+			}
+			if completedOfficialKnown {
+				officialKnown = true
+				officialValue = completedOfficial
 			}
 			if len(results) == 0 {
 				results = pendingResults
@@ -1168,10 +1188,10 @@ func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string)
 		return true
 	})
 	if err != nil {
-		return nil, usage, 0, err
+		return nil, usage, 0, 0, false, err
 	}
 	if readErr != nil {
-		return nil, usage, 0, readErr
+		return nil, usage, 0, 0, false, readErr
 	}
 	if len(out) == 0 {
 		if len(pendingResults) > 0 {
@@ -1180,16 +1200,16 @@ func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string)
 			}
 			out, readErr = buildImagesAPIResponse(pendingResults, createdAt, nil, firstMeta, responseFormat)
 			if readErr != nil {
-				return nil, usage, 0, readErr
+				return nil, usage, 0, 0, false, readErr
 			}
-			return out, usage, len(gjson.GetBytes(out, "data").Array()), nil
+			return out, usage, len(gjson.GetBytes(out, "data").Array()), officialValue, officialKnown, nil
 		}
-		return nil, usage, 0, fmt.Errorf("stream disconnected before image generation completed")
+		return nil, usage, 0, 0, false, fmt.Errorf("stream disconnected before image generation completed")
 	}
-	return out, usage, len(gjson.GetBytes(out, "data").Array()), nil
+	return out, usage, len(gjson.GetBytes(out, "data").Array()), officialValue, officialKnown, nil
 }
 
-func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseFormat, streamPrefix, fallbackModel string, start time.Time) (*UsageInfo, int, int, error) {
+func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseFormat, streamPrefix, fallbackModel string, start time.Time) (*UsageInfo, int, int, int, bool, error) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -1197,7 +1217,7 @@ func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseF
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		return nil, 0, 0, fmt.Errorf("streaming not supported")
+		return nil, 0, 0, 0, false, fmt.Errorf("streaming not supported")
 	}
 
 	var (
@@ -1207,6 +1227,8 @@ func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseF
 		streamMeta     = imageCallResult{Model: fallbackModel}
 		pendingResults []imageCallResult
 		imageCount     int
+		officialKnown  bool
+		officialValue  int
 		readErr        error
 	)
 	writeEvent := func(eventName string, payload []byte) {
@@ -1246,7 +1268,7 @@ func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseF
 				pendingResults = append(pendingResults, image)
 			}
 		case "response.completed":
-			results, completedAt, usageRaw, firstMeta, completedUsage, err := extractImagesFromResponsesCompleted(data, fallbackModel)
+			results, completedAt, usageRaw, firstMeta, completedUsage, completedOfficial, completedOfficialKnown, err := extractImagesFromResponsesCompleted(data, fallbackModel)
 			if err != nil {
 				readErr = err
 				writeEvent("error", buildImagesStreamErrorPayload(err.Error()))
@@ -1254,6 +1276,10 @@ func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseF
 			}
 			if completedUsage != nil {
 				usage = completedUsage
+			}
+			if completedOfficialKnown {
+				officialKnown = true
+				officialValue = completedOfficial
 			}
 			if completedAt > 0 {
 				createdAt = completedAt
@@ -1282,7 +1308,7 @@ func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseF
 		return true
 	})
 	if err != nil {
-		return usage, imageCount, firstTokenMs, err
+		return usage, imageCount, firstTokenMs, 0, false, err
 	}
 	if imageCount == 0 && len(pendingResults) > 0 && readErr == nil {
 		eventName := streamPrefix + ".completed"
@@ -1296,12 +1322,12 @@ func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseF
 		readErr = fmt.Errorf("stream disconnected before image generation completed")
 		writeEvent("error", buildImagesStreamErrorPayload(readErr.Error()))
 	}
-	return usage, imageCount, firstTokenMs, readErr
+	return usage, imageCount, firstTokenMs, officialValue, officialKnown, readErr
 }
 
-func extractImagesFromResponsesCompleted(payload []byte, fallbackModel string) ([]imageCallResult, int64, []byte, imageCallResult, *UsageInfo, error) {
+func extractImagesFromResponsesCompleted(payload []byte, fallbackModel string) ([]imageCallResult, int64, []byte, imageCallResult, *UsageInfo, int, bool, error) {
 	if gjson.GetBytes(payload, "type").String() != "response.completed" {
-		return nil, 0, nil, imageCallResult{}, nil, fmt.Errorf("unexpected event type")
+		return nil, 0, nil, imageCallResult{}, nil, 0, false, fmt.Errorf("unexpected event type")
 	}
 
 	createdAt := gjson.GetBytes(payload, "response.created_at").Int()
@@ -1344,7 +1370,8 @@ func extractImagesFromResponsesCompleted(payload []byte, fallbackModel string) (
 	if usage := gjson.GetBytes(payload, "response.tool_usage.image_gen"); usage.Exists() && usage.IsObject() {
 		usageRaw = []byte(usage.Raw)
 	}
-	return results, createdAt, usageRaw, firstMeta, extractUsageFromResult(gjson.GetBytes(payload, "response.usage")), nil
+	officialAvailable, officialKnown := detectOfficialImageAvailabilityFromPayload(payload)
+	return results, createdAt, usageRaw, firstMeta, extractUsageFromResult(gjson.GetBytes(payload, "response.usage")), officialAvailable, officialKnown, nil
 }
 
 func extractImageFromOutputItemDone(payload []byte, fallbackModel string) (imageCallResult, bool) {

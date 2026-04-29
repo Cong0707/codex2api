@@ -385,16 +385,20 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			if remaining, total, resetAt, _, valid, _ := acc.GetImageQuotaSnapshot(); valid {
 				remainingCopy := remaining
 				totalCopy := total
-				officialCopy := auth.OfficialImageQuotaForAccount(acc)
 				resp.ImageWebRemaining = &remainingCopy
 				resp.ImageWebTotal = &totalCopy
-				resp.ImageOfficialCount = &officialCopy
+				if officialAvailable, known := acc.GetOfficialImageAvailability(); known {
+					officialCopy := officialAvailable
+					resp.ImageOfficialCount = &officialCopy
+				}
 				if !resetAt.IsZero() {
 					resp.ImageWebResetAt = resetAt.Format(time.RFC3339)
 				}
 			} else {
-				officialCopy := auth.OfficialImageQuotaForAccount(acc)
-				resp.ImageOfficialCount = &officialCopy
+				if officialAvailable, known := acc.GetOfficialImageAvailability(); known {
+					officialCopy := officialAvailable
+					resp.ImageOfficialCount = &officialCopy
+				}
 			}
 			if t := acc.GetLastUsedAt(); !t.IsZero() {
 				resp.LastUsedAt = t.Format(time.RFC3339)
@@ -513,14 +517,19 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			}
 		}
 		if resp.ImageOfficialCount == nil {
-			officialAvailable := auth.OfficialImageQuotaForPlan(resp.PlanType)
-			if raw := strings.TrimSpace(row.GetCredential("image_official_available")); raw != "" {
-				if parsed, err := strconv.Atoi(raw); err == nil {
-					officialAvailable = parsed
+			if strings.EqualFold(strings.TrimSpace(row.GetCredential("image_official_source")), "upstream") {
+				if raw := strings.TrimSpace(row.GetCredential("image_official_available")); raw != "" {
+					if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+						officialCopy := parsed
+						resp.ImageOfficialCount = &officialCopy
+					}
 				}
 			}
-			officialCopy := officialAvailable
-			resp.ImageOfficialCount = &officialCopy
+			if resp.ImageOfficialCount == nil && auth.NormalizePlanType(resp.PlanType) == "free" {
+				officialAvailable := 0
+				officialCopy := officialAvailable
+				resp.ImageOfficialCount = &officialCopy
+			}
 		}
 		if rc, ok := reqCounts[row.ID]; ok {
 			resp.SuccessRequests = rc.SuccessCount
