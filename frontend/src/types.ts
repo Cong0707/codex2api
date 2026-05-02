@@ -23,6 +23,7 @@ export interface AccountRow {
   uploader_id?: number | null
   settlement_amount_usd?: number
   status: AccountStatus
+  image_status?: AccountStatus
   wait_mode?: boolean
   wait_reason?: string
   wait_until?: ISODateString

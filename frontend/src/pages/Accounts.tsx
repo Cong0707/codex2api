@@ -292,7 +292,8 @@ export default function Accounts() {
   const [showAdd, setShowAdd] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(PAGE_SIZE_MIN)
-  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'rate_limited' | 'full_usage' | 'image_only' | 'text_only' | 'banned' | 'locked'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'rate_limited' | 'full_usage' | 'banned' | 'locked'>('all')
+  const [imageStatusFilter, setImageStatusFilter] = useState<'all' | 'active' | 'full_usage'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [planFilter, setPlanFilter] = useState<'all' | 'plus' | 'pro' | 'team' | 'free'>('all')
   const [sortKey, setSortKey] = useState<'requests' | 'usage' | 'importTime' | null>(null)
@@ -416,8 +417,8 @@ export default function Accounts() {
   const normalAccounts = accounts.filter((account) => account.status === 'active' || account.status === 'ready').length
   const rateLimitedAccounts = accounts.filter((account) => account.status === 'rate_limited').length
   const fullUsageAccounts = accounts.filter((account) => account.status === 'full_usage').length
-  const imageOnlyAccounts = accounts.filter((account) => account.status === 'image_only').length
-  const textOnlyAccounts = accounts.filter((account) => account.status === 'text_only').length
+  const imageAvailableAccounts = accounts.filter((account) => (account.image_status || 'active') === 'active').length
+  const imageFullUsageAccounts = accounts.filter((account) => account.image_status === 'full_usage').length
   const bannedAccounts = accounts.filter((account) => account.status === 'unauthorized').length
   const lockedAccounts = accounts.filter((account) => account.locked).length
   const healthyAccounts = accounts.filter((account) => account.health_tier === 'healthy').length
@@ -465,17 +466,20 @@ export default function Accounts() {
       case 'full_usage':
         if (account.status !== 'full_usage') return false
         break
-      case 'image_only':
-        if (account.status !== 'image_only') return false
-        break
-      case 'text_only':
-        if (account.status !== 'text_only') return false
-        break
       case 'banned':
         if (account.status !== 'unauthorized') return false
         break
       case 'locked':
         if (!account.locked) return false
+        break
+    }
+    // 图片状态过滤
+    switch (imageStatusFilter) {
+      case 'active':
+        if ((account.image_status || 'active') !== 'active') return false
+        break
+      case 'full_usage':
+        if (account.image_status !== 'full_usage') return false
         break
     }
     // 套餐过滤
@@ -1269,8 +1273,8 @@ export default function Accounts() {
           <CompactStat label={t('accounts.normalAccounts')} chipLabel={t('accounts.filterNormal')} value={normalAccounts} tone="success" />
           <CompactStat label={t('accounts.rateLimited')} chipLabel={t('accounts.filterRateLimited')} value={rateLimitedAccounts} tone="warning" />
           <CompactStat label={t('accounts.fullUsageAccounts')} chipLabel={t('accounts.filterFullUsage')} value={fullUsageAccounts} tone="warning" />
-          <CompactStat label={t('accounts.imageOnlyAccounts')} chipLabel={t('accounts.filterImageOnly')} value={imageOnlyAccounts} tone="cyan" />
-          <CompactStat label={t('accounts.textOnlyAccounts')} chipLabel={t('accounts.filterTextOnly')} value={textOnlyAccounts} tone="success" />
+          <CompactStat label={t('accounts.imageAvailableAccounts')} chipLabel={t('accounts.filterImageAvailable')} value={imageAvailableAccounts} tone="cyan" />
+          <CompactStat label={t('accounts.imageFullUsageAccounts')} chipLabel={t('accounts.filterImageFullUsage')} value={imageFullUsageAccounts} tone="warning" />
           <CompactStat label={t('accounts.bannedAccounts')} chipLabel={t('accounts.filterBanned')} value={bannedAccounts} tone="danger" />
         </div>
 
@@ -1321,14 +1325,12 @@ export default function Accounts() {
         </div>
 
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-white/55 px-4 py-3 text-[12px] text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]">
-          <span className="font-semibold text-foreground">{t('accounts.filter')}</span>
+          <span className="font-semibold text-foreground">{t('accounts.textFilter')}</span>
           {([
             ['all', t('accounts.filterAll'), totalAccounts],
             ['normal', t('accounts.filterNormal'), normalAccounts],
             ['rate_limited', t('accounts.filterRateLimited'), rateLimitedAccounts],
             ['full_usage', t('accounts.filterFullUsage'), fullUsageAccounts],
-            ['image_only', t('accounts.filterImageOnly'), imageOnlyAccounts],
-            ['text_only', t('accounts.filterTextOnly'), textOnlyAccounts],
             ['banned', t('accounts.filterBanned'), bannedAccounts],
             ['locked', t('accounts.filterLocked'), lockedAccounts],
           ] as const).map(([key, label, count]) => (
@@ -1337,6 +1339,27 @@ export default function Accounts() {
               onClick={() => { setStatusFilter(key); setPage(1) }}
               className={`rounded-full px-3 py-1 font-semibold transition-colors ${
                 statusFilter === key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted/50 text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              {label} {count}
+            </button>
+          ))}
+        </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-white/55 px-4 py-3 text-[12px] text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]">
+          <span className="font-semibold text-foreground">{t('accounts.imageFilter')}</span>
+          {([
+            ['all', t('accounts.filterAll'), totalAccounts],
+            ['active', t('accounts.filterImageAvailable'), imageAvailableAccounts],
+            ['full_usage', t('accounts.filterImageFullUsage'), imageFullUsageAccounts],
+          ] as const).map(([key, label, count]) => (
+            <button
+              key={key}
+              onClick={() => { setImageStatusFilter(key); setPage(1) }}
+              className={`rounded-full px-3 py-1 font-semibold transition-colors ${
+                imageStatusFilter === key
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted/50 text-muted-foreground hover:bg-muted'
               }`}
@@ -2543,9 +2566,11 @@ function UsageBar({ label, pct, resetAt }: { label: string; pct: number; resetAt
 function ImageQuotaBar({
   remaining,
   total,
+  statusText,
 }: {
   remaining?: number | null
   total?: number | null
+  statusText?: string
 }) {
   const hasQuota = remaining !== null && remaining !== undefined && total !== null && total !== undefined
   const safeRemaining = Math.max(0, Number(remaining ?? 0))
@@ -2561,6 +2586,7 @@ function ImageQuotaBar({
         </div>
         <span className="text-[12px] font-semibold w-[64px] text-right shrink-0">{text}</span>
       </div>
+      {statusText && <div className="text-[11px] font-medium text-muted-foreground mt-0.5 pl-[38px]">{statusText}</div>}
     </div>
   )
 }
@@ -2586,6 +2612,7 @@ function UsageCell({ account, t }: { account: AccountRow; t: (key: string, optio
       <ImageQuotaBar
         remaining={hasImageWebRemaining ? account.image_web_remaining : null}
         total={hasImageWebTotal ? account.image_web_total : null}
+        statusText={account.image_status === 'full_usage' ? t('accounts.filterImageFullUsage') : t('accounts.filterImageAvailable')}
       />
     </div>
   )

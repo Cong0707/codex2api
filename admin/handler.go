@@ -248,6 +248,7 @@ type accountResponse struct {
 	UploaderID          *int64                     `json:"uploader_id,omitempty"`
 	SettlementAmountUSD float64                    `json:"settlement_amount_usd"`
 	Status              string                     `json:"status"`
+	ImageStatus         string                     `json:"image_status"`
 	WaitMode            bool                       `json:"wait_mode"`
 	WaitReason          string                     `json:"wait_reason,omitempty"`
 	WaitUntil           string                     `json:"wait_until,omitempty"`
@@ -422,11 +423,9 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			}
 			// 使用运行时状态（优先于 DB 状态）
 			resp.Status = acc.RuntimeStatus()
+			resp.ImageStatus = acc.ImageRuntimeStatus()
 			cooldownUntil, cooldownReason, activeCooldown := acc.GetCooldownSnapshot()
 			showWaitMode := resp.Status != "unauthorized" && (activeCooldown || cooldownReason == "rate_limited")
-			if cooldownReason == "full_usage" && (resp.Status == "image_only" || resp.Status == "text_only" || resp.Status == "active" || resp.Status == "ready") {
-				showWaitMode = false
-			}
 			if showWaitMode {
 				resp.WaitMode = true
 				reason := strings.TrimSpace(cooldownReason)
@@ -498,6 +497,27 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			resp.WaitProbeRemaining = resp.WaitRemainingSec
 			if resp.Status == "active" || resp.Status == "ready" {
 				resp.Status = reason
+			}
+		}
+		if resp.ImageStatus == "" {
+			resp.ImageStatus = "active"
+			imageRemaining, imageTotal := -1, -1
+			if resp.ImageWebRemaining != nil {
+				imageRemaining = *resp.ImageWebRemaining
+			} else if raw := strings.TrimSpace(row.GetCredential("image_web_remaining")); raw != "" {
+				if parsed, err := strconv.Atoi(raw); err == nil {
+					imageRemaining = parsed
+				}
+			}
+			if resp.ImageWebTotal != nil {
+				imageTotal = *resp.ImageWebTotal
+			} else if raw := strings.TrimSpace(row.GetCredential("image_web_total")); raw != "" {
+				if parsed, err := strconv.Atoi(raw); err == nil {
+					imageTotal = parsed
+				}
+			}
+			if imageTotal > 0 && imageRemaining <= 0 {
+				resp.ImageStatus = "full_usage"
 			}
 		}
 		if resp.ImageWebRemaining == nil {

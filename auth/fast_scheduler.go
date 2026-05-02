@@ -457,14 +457,8 @@ func (a *Account) fastSchedulerSnapshot(baseLimit int64, now time.Time) (Account
 			available = false
 		} else if a.CooldownReason == "full_usage" {
 			imageExhausted, imageKnown := a.imageQuotaExhaustedLocked(now)
-			available = !(a.textQuotaFullLocked(now) && imageKnown && imageExhausted)
+			available = !imageKnown || !imageExhausted
 		} else if now.Before(a.CooldownUtil) {
-			available = false
-		}
-	}
-	if available {
-		imageExhausted, imageKnown := a.imageQuotaExhaustedLocked(now)
-		if a.textQuotaFullLocked(now) && imageKnown && imageExhausted {
 			available = false
 		}
 	}

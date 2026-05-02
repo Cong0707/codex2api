@@ -354,22 +354,6 @@ func (a *Account) imageQuotaExhaustedLocked(now time.Time) (exhausted bool, know
 	return true, true
 }
 
-func (a *Account) capabilityStatusLocked(now time.Time) string {
-	textFull := a.textQuotaFullLocked(now)
-	imageExhausted, imageKnown := a.imageQuotaExhaustedLocked(now)
-	imageFull := imageKnown && imageExhausted
-	switch {
-	case textFull && imageFull:
-		return "full_usage"
-	case textFull:
-		return "image_only"
-	case imageFull:
-		return "text_only"
-	default:
-		return "active"
-	}
-}
-
 // usagePriorityBonusLocked 高用量优先调度：>80% 逐级加分，推动先消耗高进度账号。
 func (a *Account) usagePriorityBonusLocked() float64 {
 	usagePct, ok := a.currentUsagePercentLocked()
@@ -535,12 +519,8 @@ func (a *Account) IsAvailable() bool {
 	now := time.Now()
 	if a.Status == StatusCooldown {
 		// rate_limited 必须等待测活成功后才放出，避免仅靠时间到点自动回池
-		if a.CooldownReason == "rate_limited" || a.CooldownReason == "unauthorized" {
+		if a.CooldownReason == "rate_limited" {
 			return false
-		}
-		if a.CooldownReason == "full_usage" {
-			status := a.capabilityStatusLocked(now)
-			return status == "image_only" || status == "text_only" || status == "active"
 		}
 		if now.Before(a.CooldownUtil) {
 			return false
@@ -548,7 +528,7 @@ func (a *Account) IsAvailable() bool {
 		// 非 rate_limited 冷却过期后自动恢复
 		return true
 	}
-	return a.capabilityStatusLocked(now) != "full_usage"
+	return true
 }
 
 // IsTextAvailable 检查账号是否可用于文本/Codex 请求。
@@ -564,10 +544,8 @@ func (a *Account) IsTextAvailable() bool {
 	}
 	if a.Status == StatusCooldown {
 		switch a.CooldownReason {
-		case "rate_limited", "unauthorized":
+		case "rate_limited":
 			return false
-		case "full_usage":
-			// 文本额度已恢复时，不必等旧 full_usage 冷却时间自然结束。
 		default:
 			if now.Before(a.CooldownUtil) {
 				return false
@@ -604,27 +582,15 @@ func (a *Account) CanAttemptImageGeneration() bool {
 	return !imageKnown || !imageExhausted
 }
 
-// IsTextQuotaFull 返回文本/Codex 用量是否已满。
-func (a *Account) IsTextQuotaFull() bool {
+// ImageRuntimeStatus 返回独立图片状态：active / full_usage。
+func (a *Account) ImageRuntimeStatus() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.textQuotaFullLocked(time.Now())
-}
-
-// IsImageQuotaExhausted 返回图片额度是否已知耗尽；known=false 表示上游未给出可信计数。
-func (a *Account) IsImageQuotaExhausted() (exhausted bool, known bool) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.imageQuotaExhaustedLocked(time.Now())
-}
-
-// IsFullyExhausted 返回文本和图片能力是否均已不可用。
-func (a *Account) IsFullyExhausted() bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	now := time.Now()
-	imageExhausted, imageKnown := a.imageQuotaExhaustedLocked(now)
-	return a.textQuotaFullLocked(now) && imageKnown && imageExhausted
+	exhausted, known := a.imageQuotaExhaustedLocked(time.Now())
+	if known && exhausted {
+		return "full_usage"
+	}
+	return "active"
 }
 
 // NeedsRefresh 检查 AT 是否需要刷新（过期前 5 分钟刷新）
@@ -743,15 +709,6 @@ func (a *Account) RuntimeStatus() string {
 		if a.CooldownReason == "rate_limited" {
 			return "rate_limited"
 		}
-		if a.CooldownReason == "unauthorized" {
-			return "unauthorized"
-		}
-		if a.CooldownReason == "full_usage" {
-			capabilityStatus := a.capabilityStatusLocked(now)
-			if capabilityStatus != "full_usage" {
-				return capabilityStatus
-			}
-		}
 		if now.Before(a.CooldownUtil) {
 			if a.CooldownReason != "" {
 				return a.CooldownReason
@@ -761,7 +718,7 @@ func (a *Account) RuntimeStatus() string {
 		return "active" // 冷却过期，已恢复
 	default:
 		if a.AccessToken != "" {
-			return a.capabilityStatusLocked(now)
+			return "active"
 		}
 		return "error"
 	}
@@ -2057,10 +2014,11 @@ func (s *Store) NextMatching(exclude map[int64]bool, matcher AccountMatcher) *Ac
 		if exclude != nil && exclude[acc.DBID] {
 			continue
 		}
-		if !acc.IsAvailable() {
-			continue
-		}
-		if matcher != nil && !matcher(acc) {
+		if matcher != nil {
+			if !matcher(acc) {
+				continue
+			}
+		} else if !acc.IsAvailable() {
 			continue
 		}
 
@@ -2210,10 +2168,14 @@ func (s *Store) takeByIDExcluding(id int64, exclude map[int64]bool, matcher Acco
 	}
 	s.mu.RUnlock()
 
-	if target == nil || !target.IsAvailable() {
+	if target == nil {
 		return nil
 	}
-	if matcher != nil && !matcher(target) {
+	if matcher != nil {
+		if !matcher(target) {
+			return nil
+		}
+	} else if !target.IsAvailable() {
 		return nil
 	}
 
@@ -2941,9 +2903,6 @@ func (s *Store) resolveFullUsageWaitUntil(acc *Account, now time.Time) (time.Tim
 	if acc == nil {
 		return time.Time{}, false
 	}
-	if !acc.IsFullyExhausted() {
-		return time.Time{}, false
-	}
 
 	var until time.Time
 	appendUntil := func(candidate time.Time) {
@@ -2955,14 +2914,12 @@ func (s *Store) resolveFullUsageWaitUntil(acc *Account, now time.Time) (time.Tim
 		}
 	}
 
-	acc.mu.RLock()
-	if usageWindowFullLocked(acc.UsagePercent7dValid, acc.UsagePercent7d, acc.Reset7dAt, now) {
-		appendUntil(acc.Reset7dAt)
+	if pct7d, ok := acc.GetUsagePercent7d(); ok && pct7d >= 100.0 {
+		appendUntil(acc.GetReset7dAt())
 	}
-	if usageWindowFullLocked(acc.UsagePercent5hValid, acc.UsagePercent5h, acc.Reset5hAt, now) {
-		appendUntil(acc.Reset5hAt)
+	if pct5h, ok := acc.GetUsagePercent5h(); ok && pct5h >= 100.0 {
+		appendUntil(acc.GetReset5hAt())
 	}
-	acc.mu.RUnlock()
 
 	if until.IsZero() {
 		return time.Time{}, false
@@ -3009,9 +2966,9 @@ func (s *Store) WaitFullUsageAccounts(ctx context.Context) int {
 			continue
 		}
 
-		pct7d, _ := acc.GetUsagePercent7d()
-		pct5h, _ := acc.GetUsagePercent5h()
-		if !acc.IsFullyExhausted() {
+		pct7d, valid7d := acc.GetUsagePercent7d()
+		pct5h, valid5h := acc.GetUsagePercent5h()
+		if !(valid7d && pct7d >= 100.0) && !(valid5h && pct5h >= 100.0) {
 			continue
 		}
 
@@ -3055,11 +3012,6 @@ func (s *Store) CleanFullUsageAccounts(ctx context.Context) int {
 
 		// 跳过正在处理请求的账号
 		if atomic.LoadInt64(&acc.ActiveRequests) > 0 {
-			continue
-		}
-
-		// 检查文本和图片能力是否都已耗尽；仅图片/仅文本账号不能被自动删除。
-		if !acc.IsFullyExhausted() {
 			continue
 		}
 
