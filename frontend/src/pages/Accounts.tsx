@@ -1273,8 +1273,8 @@ export default function Accounts() {
           <CompactStat label={t('accounts.normalAccounts')} chipLabel={t('accounts.filterNormal')} value={normalAccounts} tone="success" />
           <CompactStat label={t('accounts.rateLimited')} chipLabel={t('accounts.filterRateLimited')} value={rateLimitedAccounts} tone="warning" />
           <CompactStat label={t('accounts.fullUsageAccounts')} chipLabel={t('accounts.filterFullUsage')} value={fullUsageAccounts} tone="warning" />
-          <CompactStat label={t('accounts.imageAvailableAccounts')} chipLabel={t('accounts.filterImageAvailable')} value={imageAvailableAccounts} tone="cyan" />
           <CompactStat label={t('accounts.imageFullUsageAccounts')} chipLabel={t('accounts.filterImageFullUsage')} value={imageFullUsageAccounts} tone="warning" />
+          <CompactStat label={t('accounts.imageAvailableAccounts')} chipLabel={t('accounts.filterImageAvailable')} value={imageAvailableAccounts} tone="cyan" />
           <CompactStat label={t('accounts.bannedAccounts')} chipLabel={t('accounts.filterBanned')} value={bannedAccounts} tone="danger" />
         </div>
 
