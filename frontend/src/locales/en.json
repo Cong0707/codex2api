@@ -402,6 +402,8 @@
     "cooldown": "Cooling Down",
     "rate_limited": "Rate Limited",
     "full_usage": "Usage Exhausted",
+    "image_active": "Image Available",
+    "image_full_usage": "Image Usage Exhausted",
     "unauthorized": "Banned",
     "error": "Error",
     "paused": "Paused",

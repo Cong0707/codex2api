@@ -402,6 +402,8 @@
     "cooldown": "冷却中",
     "rate_limited": "限流",
     "full_usage": "用量已满",
+    "image_active": "图片可用",
+    "image_full_usage": "图片用量已满",
     "unauthorized": "封禁",
     "error": "错误",
     "paused": "已暂停",

@@ -1273,8 +1273,8 @@ export default function Accounts() {
           <CompactStat label={t('accounts.normalAccounts')} chipLabel={t('accounts.filterNormal')} value={normalAccounts} tone="success" />
           <CompactStat label={t('accounts.rateLimited')} chipLabel={t('accounts.filterRateLimited')} value={rateLimitedAccounts} tone="warning" />
           <CompactStat label={t('accounts.fullUsageAccounts')} chipLabel={t('accounts.filterFullUsage')} value={fullUsageAccounts} tone="warning" />
-          <CompactStat label={t('accounts.imageFullUsageAccounts')} chipLabel={t('accounts.filterImageFullUsage')} value={imageFullUsageAccounts} tone="warning" />
           <CompactStat label={t('accounts.imageAvailableAccounts')} chipLabel={t('accounts.filterImageAvailable')} value={imageAvailableAccounts} tone="cyan" />
+          <CompactStat label={t('accounts.imageFullUsageAccounts')} chipLabel={t('accounts.filterImageFullUsage')} value={imageFullUsageAccounts} tone="warning" />
           <CompactStat label={t('accounts.bannedAccounts')} chipLabel={t('accounts.filterBanned')} value={bannedAccounts} tone="danger" />
         </div>
 
@@ -1556,7 +1556,10 @@ export default function Accounts() {
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1">
-                            <StatusBadge status={account.status} />
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <StatusBadge status={account.status} />
+                              <StatusBadge status={account.image_status === 'full_usage' ? 'image_full_usage' : 'image_active'} />
+                            </div>
                             <div className="text-[11px] text-muted-foreground">
                               {t('accounts.healthSummary', {
                                 health: formatHealthTier(account.health_tier, t),
@@ -2566,11 +2569,9 @@ function UsageBar({ label, pct, resetAt }: { label: string; pct: number; resetAt
 function ImageQuotaBar({
   remaining,
   total,
-  statusText,
 }: {
   remaining?: number | null
   total?: number | null
-  statusText?: string
 }) {
   const hasQuota = remaining !== null && remaining !== undefined && total !== null && total !== undefined
   const safeRemaining = Math.max(0, Number(remaining ?? 0))
@@ -2586,7 +2587,6 @@ function ImageQuotaBar({
         </div>
         <span className="text-[12px] font-semibold w-[64px] text-right shrink-0">{text}</span>
       </div>
-      {statusText && <div className="text-[11px] font-medium text-muted-foreground mt-0.5 pl-[38px]">{statusText}</div>}
     </div>
   )
 }
@@ -2612,7 +2612,6 @@ function UsageCell({ account, t }: { account: AccountRow; t: (key: string, optio
       <ImageQuotaBar
         remaining={hasImageWebRemaining ? account.image_web_remaining : null}
         total={hasImageWebTotal ? account.image_web_total : null}
-        statusText={account.image_status === 'full_usage' ? t('accounts.filterImageFullUsage') : t('accounts.filterImageAvailable')}
       />
     </div>
   )
