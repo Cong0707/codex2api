@@ -145,6 +145,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			scheduler_plan_bonus INTEGER DEFAULT 0,
 			quota_rate_plus REAL DEFAULT 10,
 			quota_rate_pro REAL DEFAULT 100,
+			quota_rate_pro_5x REAL DEFAULT 25,
+			quota_rate_pro_20x REAL DEFAULT 100,
 			quota_rate_team REAL DEFAULT 10,
 			max_retries INTEGER DEFAULT 2,
 			allow_remote_migration INTEGER DEFAULT 0,
@@ -242,6 +244,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "scheduler_plan_bonus", "INTEGER DEFAULT 0"},
 		{"system_settings", "quota_rate_plus", "REAL DEFAULT 10"},
 		{"system_settings", "quota_rate_pro", "REAL DEFAULT 100"},
+		{"system_settings", "quota_rate_pro_5x", "REAL DEFAULT 25"},
+		{"system_settings", "quota_rate_pro_20x", "REAL DEFAULT 100"},
 		{"system_settings", "quota_rate_team", "REAL DEFAULT 10"},
 		{"system_settings", "max_retries", "INTEGER DEFAULT 2"},
 		{"system_settings", "allow_remote_migration", "INTEGER DEFAULT 0"},
@@ -265,6 +269,15 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			ELSE 'off'
 		END
 		WHERE COALESCE(auto_clean_full_usage_mode, '') = ''
+	`); err != nil {
+		return err
+	}
+	if _, err := db.conn.ExecContext(ctx, `
+		UPDATE system_settings
+		SET quota_rate_pro_20x = COALESCE(NULLIF(quota_rate_pro, 0), 100)
+		WHERE quota_rate_pro_20x IS NULL
+		   OR quota_rate_pro_20x <= 0
+		   OR (quota_rate_pro_20x = 100 AND COALESCE(NULLIF(quota_rate_pro, 0), 100) <> 100)
 	`); err != nil {
 		return err
 	}

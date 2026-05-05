@@ -55,6 +55,22 @@ func NormalizePlanType(plan string) string {
 	}
 }
 
+// PlanVariant 返回用于展示/精细过滤的套餐分支。
+// 行为上 prolite/pro5x/pro20x 都属于 pro；这里专门保留 Pro 5x / 20x 差异。
+func PlanVariant(plan string) string {
+	text := compactPlanText(plan)
+	switch {
+	case text == "":
+		return ""
+	case text == "prolite", strings.Contains(text, "pro5x"), strings.Contains(text, "5x"):
+		return "pro_5x"
+	case text == "pro", strings.Contains(text, "pro20x"), strings.Contains(text, "20x"):
+		return "pro_20x"
+	default:
+		return NormalizePlanType(plan)
+	}
+}
+
 // PreferPlanType 选择更可信的套餐值（优先级：enterprise > team > pro > plus > free）。
 func PreferPlanType(a, b string) string {
 	pa := NormalizePlanType(a)

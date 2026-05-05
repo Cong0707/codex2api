@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codex2api/auth"
 	"github.com/codex2api/database"
 	"github.com/codex2api/security"
 	"github.com/gin-gonic/gin"
@@ -298,6 +299,56 @@ func deriveQuotaStatus(row *database.AccountRow, now time.Time) string {
 	return row.Status
 }
 
+type publicQuotaRateConfig struct {
+	plus   float64
+	pro5x  float64
+	pro20x float64
+	team   float64
+}
+
+func (h *Handler) loadPublicQuotaRates(ctx context.Context) publicQuotaRateConfig {
+	plus, pro5x, pro20x, team := defaultQuotaRates()
+	if h == nil || h.db == nil {
+		return publicQuotaRateConfig{plus: plus, pro5x: pro5x, pro20x: pro20x, team: team}
+	}
+	if settings, err := h.db.GetSystemSettings(ctx); err == nil && settings != nil {
+		if normalized, ok := normalizeQuotaRate(settings.QuotaRatePlus, plus); ok {
+			plus = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(settings.QuotaRatePro5x, pro5x); ok {
+			pro5x = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(settings.QuotaRatePro20x, pro20x); ok {
+			pro20x = normalized
+		} else if normalized, ok := normalizeQuotaRate(settings.QuotaRatePro, pro20x); ok {
+			pro20x = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(settings.QuotaRateTeam, team); ok {
+			team = normalized
+		}
+	}
+	return publicQuotaRateConfig{plus: plus, pro5x: pro5x, pro20x: pro20x, team: team}
+}
+
+func publicQuotaWeight(plan string, rates publicQuotaRateConfig) float64 {
+	switch auth.PlanVariant(plan) {
+	case "pro_5x":
+		return rates.pro5x
+	case "pro_20x", "pro":
+		return rates.pro20x
+	}
+	switch auth.NormalizePlanType(plan) {
+	case "plus":
+		return rates.plus
+	case "team", "enterprise":
+		return rates.team
+	case "free":
+		return 1
+	default:
+		return 1
+	}
+}
+
 // PublicQuotaStats 返回账号页额度统计（口径与账号管理一致，排除 unauthorized 和 deleted）
 func (h *Handler) PublicQuotaStats(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
@@ -310,16 +361,20 @@ func (h *Handler) PublicQuotaStats(c *gin.Context) {
 	}
 
 	now := time.Now()
+	rates := h.loadPublicQuotaRates(ctx)
 	quotaAccountCount := 0
+	quotaTotalFloat := 0.0
 	usageSum := 0.0
 
 	for _, row := range rows {
 		status := deriveQuotaStatus(row, now)
+		planType := row.GetCredential("plan_type")
 		var runtimeUsage float64
 		runtimeUsageValid := false
 		if h.store != nil {
 			if acc := h.store.FindByID(row.ID); acc != nil {
 				status = acc.RuntimeStatus()
+				planType = acc.GetPlanType()
 				if usage, ok := acc.GetUsagePercent7d(); ok {
 					runtimeUsage = clampPublicUsagePercent(usage)
 					runtimeUsageValid = true
@@ -333,14 +388,16 @@ func (h *Handler) PublicQuotaStats(c *gin.Context) {
 
 		quotaAccountCount++
 
+		weight := publicQuotaWeight(planType, rates)
+		quotaTotalFloat += weight * 100
 		usage := parsePublicUsagePercent(row.GetCredential("codex_7d_used_percent"))
 		if runtimeUsageValid {
 			usage = runtimeUsage
 		}
-		usageSum += usage
+		usageSum += weight * usage
 	}
 
-	quotaTotal := quotaAccountCount * 100
+	quotaTotal := int(math.Round(quotaTotalFloat))
 	quotaUsed := int(math.Round(usageSum))
 	quotaRemaining := quotaTotal - quotaUsed
 	if quotaRemaining < 0 {

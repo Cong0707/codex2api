@@ -268,6 +268,91 @@ func TestPublicQuotaStatsExcludeUnauthorizedAndDeleted(t *testing.T) {
 	}
 }
 
+func TestPublicQuotaStatsUsePlanVariantRates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newSQLiteDBForAdminTest(t)
+	h := &Handler{db: db}
+
+	ctx := context.Background()
+	if err := db.UpdateSystemSettings(ctx, &database.SystemSettings{
+		QuotaRatePlus:   10,
+		QuotaRatePro:    100,
+		QuotaRatePro5x:  25,
+		QuotaRatePro20x: 100,
+		QuotaRateTeam:   10,
+	}); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+
+	pro5xID, err := db.InsertATAccount(ctx, "pro5x", "at-token-pro5x", "")
+	if err != nil {
+		t.Fatalf("insert pro5x account: %v", err)
+	}
+	if err := db.UpdateCredentials(ctx, pro5xID, map[string]interface{}{
+		"plan_type":             "prolite",
+		"codex_7d_used_percent": 50.0,
+	}); err != nil {
+		t.Fatalf("update pro5x usage: %v", err)
+	}
+
+	pro20xID, err := db.InsertATAccount(ctx, "pro20x", "at-token-pro20x", "")
+	if err != nil {
+		t.Fatalf("insert pro20x account: %v", err)
+	}
+	if err := db.UpdateCredentials(ctx, pro20xID, map[string]interface{}{
+		"plan_type":             "pro",
+		"codex_7d_used_percent": 25.0,
+	}); err != nil {
+		t.Fatalf("update pro20x usage: %v", err)
+	}
+
+	r := gin.New()
+	h.RegisterPublicRoutes(r)
+
+	req := httptest.NewRequest(http.MethodGet, "/public/quota-stats", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want=%d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload struct {
+		QuotaAccountCount      int     `json:"quota_account_count"`
+		QuotaTotal             int     `json:"quota_total"`
+		QuotaUsed              int     `json:"quota_used"`
+		QuotaRemaining         int     `json:"quota_remaining"`
+		QuotaUsedPercent       float64 `json:"quota_used_percent"`
+		QuotaRemainingPercent  float64 `json:"quota_remaining_percent"`
+		QuotaRemainingAccounts float64 `json:"quota_remaining_accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if payload.QuotaAccountCount != 2 {
+		t.Fatalf("quota_account_count=%d, want=2", payload.QuotaAccountCount)
+	}
+	if payload.QuotaTotal != 12500 {
+		t.Fatalf("quota_total=%d, want=12500", payload.QuotaTotal)
+	}
+	if payload.QuotaUsed != 3750 {
+		t.Fatalf("quota_used=%d, want=3750", payload.QuotaUsed)
+	}
+	if payload.QuotaRemaining != 8750 {
+		t.Fatalf("quota_remaining=%d, want=8750", payload.QuotaRemaining)
+	}
+	if payload.QuotaUsedPercent != 30 {
+		t.Fatalf("quota_used_percent=%.2f, want=30", payload.QuotaUsedPercent)
+	}
+	if payload.QuotaRemainingPercent != 70 {
+		t.Fatalf("quota_remaining_percent=%.2f, want=70", payload.QuotaRemainingPercent)
+	}
+	if payload.QuotaRemainingAccounts != 87.5 {
+		t.Fatalf("quota_remaining_accounts=%.2f, want=87.5", payload.QuotaRemainingAccounts)
+	}
+}
+
 func TestPublicKeyInfoPostAlias(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newSQLiteDBForAdminTest(t)

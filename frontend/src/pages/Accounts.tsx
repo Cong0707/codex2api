@@ -81,7 +81,8 @@ function roundTo2(value: number): number {
 
 type QuotaRateConfig = {
   plus: number
-  pro: number
+  pro5x: number
+  pro20x: number
   team: number
 }
 
@@ -174,12 +175,13 @@ function formatPlanLabel(planType?: string): string {
 }
 
 function resolvePlanWeight(planType: string | undefined, rates: QuotaRateConfig): number {
-  const plan = normalizePlanForBehavior(planType)
-  if (plan === 'pro') return rates.pro
+  const plan = normalizePlanFilterValue(planType)
+  if (plan === 'pro_5x') return rates.pro5x
+  if (plan === 'pro_20x' || plan === 'pro') return rates.pro20x
   if (plan === 'plus') return rates.plus
-  if (plan === 'team') return rates.team
+  if (plan === 'team' || plan === 'enterprise') return rates.team
   if (plan === 'free') return 1
-  return rates.team
+  return 1
 }
 
 function calcWeightedTotal(accounts: AccountRow[], rates: QuotaRateConfig): number {
@@ -393,7 +395,8 @@ export default function Accounts() {
   const [oauthCompleting, setOauthCompleting] = useState(false)
   const [quotaRates, setQuotaRates] = useState<QuotaRateConfig>({
     plus: 10,
-    pro: 100,
+    pro5x: 25,
+    pro20x: 100,
     team: 10,
   })
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -419,13 +422,15 @@ export default function Accounts() {
       const settings = await api.getSettings()
       setQuotaRates({
         plus: normalizeRate(settings.quota_rate_plus ?? 10, 10),
-        pro: normalizeRate(settings.quota_rate_pro ?? 100, 100),
+        pro5x: normalizeRate(settings.quota_rate_pro_5x ?? 25, 25),
+        pro20x: normalizeRate(settings.quota_rate_pro_20x ?? settings.quota_rate_pro ?? 100, 100),
         team: normalizeRate(settings.quota_rate_team ?? 10, 10),
       })
     } catch {
       setQuotaRates({
         plus: 10,
-        pro: 100,
+        pro5x: 25,
+        pro20x: 100,
         team: 10,
       })
     }

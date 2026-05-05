@@ -81,6 +81,8 @@ func main() {
 			PublicFullCreditUSD:              2,
 			QuotaRatePlus:                    10,
 			QuotaRatePro:                     100,
+			QuotaRatePro5x:                   25,
+			QuotaRatePro20x:                  100,
 			QuotaRateTeam:                    10,
 		}
 		_ = db.UpdateSystemSettings(context.Background(), settings)
@@ -103,6 +105,8 @@ func main() {
 			PublicFullCreditUSD:              2,
 			QuotaRatePlus:                    10,
 			QuotaRatePro:                     100,
+			QuotaRatePro5x:                   25,
+			QuotaRatePro20x:                  100,
 			QuotaRateTeam:                    10,
 		}
 	} else {

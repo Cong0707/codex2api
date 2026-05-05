@@ -250,6 +250,8 @@ export interface SystemSettings {
   scheduler_plan_bonus: number
   quota_rate_plus: number
   quota_rate_pro: number
+  quota_rate_pro_5x: number
+  quota_rate_pro_20x: number
   quota_rate_team: number
   max_retries: number
   allow_remote_migration: boolean

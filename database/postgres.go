@@ -345,6 +345,8 @@ func (db *DB) migrate(ctx context.Context) error {
 		scheduler_plan_bonus INT DEFAULT 0,
 		quota_rate_plus NUMERIC(12,4) DEFAULT 10,
 		quota_rate_pro NUMERIC(12,4) DEFAULT 100,
+		quota_rate_pro_5x NUMERIC(12,4) DEFAULT 25,
+		quota_rate_pro_20x NUMERIC(12,4) DEFAULT 100,
 		quota_rate_team NUMERIC(12,4) DEFAULT 10,
 		public_initial_credit_usd NUMERIC(12,4) DEFAULT 0.1,
 		public_full_credit_usd NUMERIC(12,4) DEFAULT 2,
@@ -375,7 +377,14 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS scheduler_plan_bonus INT DEFAULT 0;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_plus NUMERIC(12,4) DEFAULT 10;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_pro NUMERIC(12,4) DEFAULT 100;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_pro_5x NUMERIC(12,4) DEFAULT 25;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_pro_20x NUMERIC(12,4) DEFAULT 100;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS quota_rate_team NUMERIC(12,4) DEFAULT 10;
+	UPDATE system_settings
+	SET quota_rate_pro_20x = COALESCE(NULLIF(quota_rate_pro, 0), 100)
+	WHERE quota_rate_pro_20x IS NULL
+	   OR quota_rate_pro_20x <= 0
+	   OR (quota_rate_pro_20x = 100 AND COALESCE(NULLIF(quota_rate_pro, 0), 100) <> 100);
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS model_mapping TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS background_refresh_interval_minutes INT DEFAULT 2;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_probe_max_age_minutes INT DEFAULT 10;
@@ -577,6 +586,8 @@ type SystemSettings struct {
 	PublicFullCreditUSD              float64
 	QuotaRatePlus                    float64
 	QuotaRatePro                     float64
+	QuotaRatePro5x                   float64
+	QuotaRatePro20x                  float64
 	QuotaRateTeam                    float64
 	ModelMapping                     string // JSON: {"anthropic_model": "codex_model", ...}
 	BackgroundRefreshIntervalMinutes int
@@ -617,6 +628,8 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(public_full_credit_usd, 2),
 		       COALESCE(quota_rate_plus, 10),
 		       COALESCE(quota_rate_pro, 100),
+		       COALESCE(quota_rate_pro_5x, 25),
+		       COALESCE(NULLIF(quota_rate_pro_20x, 0), COALESCE(NULLIF(quota_rate_pro, 0), 100)),
 		       COALESCE(quota_rate_team, 10),
 		       COALESCE(model_mapping, '{}'),
 		       COALESCE(background_refresh_interval_minutes, 2),
@@ -630,7 +643,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.SchedulerPreferredPlan, &s.SchedulerPlanBonus,
 		&s.MaxRetries, &s.AllowRemoteMigration,
 		&s.AutoCleanError, &s.AutoCleanExpired, &s.PublicInitialCreditUSD, &s.PublicFullCreditUSD,
-		&s.QuotaRatePlus, &s.QuotaRatePro, &s.QuotaRateTeam,
+		&s.QuotaRatePlus, &s.QuotaRatePro, &s.QuotaRatePro5x, &s.QuotaRatePro20x, &s.QuotaRateTeam,
 		&s.ModelMapping, &s.BackgroundRefreshIntervalMinutes, &s.UsageProbeMaxAgeMinutes, &s.RecoveryProbeIntervalMinutes,
 	)
 	if err == sql.ErrNoRows {
@@ -657,12 +670,12 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 			id, max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
 			auto_clean_unauthorized, auto_clean_rate_limited, admin_secret, auto_clean_full_usage, auto_clean_full_usage_mode, proxy_pool_enabled,
 			fast_scheduler_enabled, plus_port_enabled, plus_port_access_free, image_route_priority, scheduler_preferred_plan, scheduler_plan_bonus,
-			quota_rate_plus, quota_rate_pro, quota_rate_team,
+			quota_rate_plus, quota_rate_pro, quota_rate_pro_5x, quota_rate_pro_20x, quota_rate_team,
 			max_retries, allow_remote_migration, auto_clean_error, auto_clean_expired,
 			public_initial_credit_usd, public_full_credit_usd, model_mapping,
 			background_refresh_interval_minutes, usage_probe_max_age_minutes, recovery_probe_interval_minutes
 		)
-		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+		VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
 		ON CONFLICT (id) DO UPDATE SET
 			max_concurrency         = EXCLUDED.max_concurrency,
 			global_rpm              = EXCLUDED.global_rpm,
@@ -685,6 +698,8 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 			scheduler_plan_bonus    = EXCLUDED.scheduler_plan_bonus,
 			quota_rate_plus         = EXCLUDED.quota_rate_plus,
 			quota_rate_pro          = EXCLUDED.quota_rate_pro,
+			quota_rate_pro_5x       = EXCLUDED.quota_rate_pro_5x,
+			quota_rate_pro_20x      = EXCLUDED.quota_rate_pro_20x,
 			quota_rate_team         = EXCLUDED.quota_rate_team,
 			max_retries             = EXCLUDED.max_retries,
 			allow_remote_migration  = EXCLUDED.allow_remote_migration,
@@ -699,7 +714,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 	`, s.MaxConcurrency, s.GlobalRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 		s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, fullUsageEnabled, fullUsageMode, s.ProxyPoolEnabled,
 		s.FastSchedulerEnabled, s.PlusPortEnabled, s.PlusPortAccessFree, s.ImageRoutePriority, s.SchedulerPreferredPlan, s.SchedulerPlanBonus,
-		s.QuotaRatePlus, s.QuotaRatePro, s.QuotaRateTeam,
+		s.QuotaRatePlus, s.QuotaRatePro, s.QuotaRatePro5x, s.QuotaRatePro20x, s.QuotaRateTeam,
 		s.MaxRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired, s.PublicInitialCreditUSD, s.PublicFullCreditUSD,
 		s.ModelMapping, s.BackgroundRefreshIntervalMinutes, s.UsageProbeMaxAgeMinutes, s.RecoveryProbeIntervalMinutes)
 	return err

@@ -95,6 +95,8 @@ export default function Settings() {
     scheduler_plan_bonus: 0,
     quota_rate_plus: 10,
     quota_rate_pro: 100,
+    quota_rate_pro_5x: 25,
+    quota_rate_pro_20x: 100,
     quota_rate_team: 10,
     max_retries: 2,
     allow_remote_migration: false,
@@ -136,6 +138,8 @@ export default function Settings() {
       scheduler_plan_bonus: settings.scheduler_plan_bonus ?? 0,
       quota_rate_plus: settings.quota_rate_plus ?? 10,
       quota_rate_pro: settings.quota_rate_pro ?? 100,
+      quota_rate_pro_5x: settings.quota_rate_pro_5x ?? 25,
+      quota_rate_pro_20x: settings.quota_rate_pro_20x ?? settings.quota_rate_pro ?? 100,
       quota_rate_team: settings.quota_rate_team ?? 10,
     })
     setLoadedAdminSecret(settings.admin_secret ?? '')
@@ -313,6 +317,8 @@ export default function Settings() {
         scheduler_plan_bonus: updated.scheduler_plan_bonus ?? 0,
         quota_rate_plus: updated.quota_rate_plus ?? 10,
         quota_rate_pro: updated.quota_rate_pro ?? 100,
+        quota_rate_pro_5x: updated.quota_rate_pro_5x ?? 25,
+        quota_rate_pro_20x: updated.quota_rate_pro_20x ?? updated.quota_rate_pro ?? 100,
         quota_rate_team: updated.quota_rate_team ?? 10,
       })
       setLoadedAdminSecret(updated.admin_secret ?? '')
@@ -375,7 +381,8 @@ export default function Settings() {
     { label: t('settings.schedulerPreferredPlanOff'), value: '' },
     { label: 'Free', value: 'free' },
     { label: 'Plus', value: 'plus' },
-    { label: 'Pro', value: 'pro' },
+    { label: 'Pro 20x', value: 'pro_20x' },
+    { label: 'Pro 5x', value: 'pro_5x' },
     { label: 'Team', value: 'team' },
     { label: 'Enterprise', value: 'enterprise' },
   ]
@@ -765,17 +772,34 @@ export default function Settings() {
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.quotaRatePlusDesc')}</p>
               </div>
               <div>
-                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.quotaRatePro')}</label>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.quotaRatePro20x')}</label>
                 <Input
                   type="number"
                   min={0.0001}
                   step="0.0001"
-                  value={settingsForm.quota_rate_pro}
+                  value={settingsForm.quota_rate_pro_20x}
                   onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setSettingsForm((f) => ({ ...f, quota_rate_pro: Number.parseFloat(e.target.value) || 0 }))
+                    setSettingsForm((f) => ({
+                      ...f,
+                      quota_rate_pro_20x: Number.parseFloat(e.target.value) || 0,
+                      quota_rate_pro: Number.parseFloat(e.target.value) || 0,
+                    }))
                   }
                 />
-                <p className="text-xs text-muted-foreground mt-1">{t('settings.quotaRateProDesc')}</p>
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.quotaRatePro20xDesc')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.quotaRatePro5x')}</label>
+                <Input
+                  type="number"
+                  min={0.0001}
+                  step="0.0001"
+                  value={settingsForm.quota_rate_pro_5x}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setSettingsForm((f) => ({ ...f, quota_rate_pro_5x: Number.parseFloat(e.target.value) || 0 }))
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.quotaRatePro5xDesc')}</p>
               </div>
               <div>
                 <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.quotaRateTeam')}</label>

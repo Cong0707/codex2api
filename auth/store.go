@@ -1093,7 +1093,7 @@ type Store struct {
 	plusPortEnabled           atomic.Bool
 	plusPortAccessFree        atomic.Bool
 	imageRoutePriority        atomic.Value // string: official_first / web_first
-	preferredPlanType         atomic.Value // string: free/plus/pro/team/enterprise 或空
+	preferredPlanType         atomic.Value // string: free/plus/pro_5x/pro_20x/team/enterprise 或空
 	preferredPlanBonus        int64        // 指定套餐额外调度加分
 	modelMapping              atomic.Value // string: {"anthropic_model":"codex_model", ...}
 	maxRetries                int64        // 请求失败最大重试次数（换号重试）
@@ -1151,12 +1151,20 @@ func truthyEnv(v string) bool {
 }
 
 func normalizePreferredPlanType(plan string) string {
-	normalized := NormalizePlanType(plan)
-	switch normalized {
-	case "free", "plus", "pro", "team", "enterprise":
-		return normalized
+	trimmed := strings.ToLower(strings.TrimSpace(plan))
+	switch trimmed {
+	case "prolite", "pro_lite", "pro-lite", "pro5x", "pro_5x", "pro-5x":
+		return "pro_5x"
+	case "pro", "pro20x", "pro_20x", "pro-20x":
+		return "pro_20x"
 	default:
-		return ""
+		normalized := NormalizePlanType(trimmed)
+		switch normalized {
+		case "free", "plus", "team", "enterprise":
+			return normalized
+		default:
+			return ""
+		}
 	}
 }
 
@@ -1190,6 +1198,12 @@ func matchPreferredPlan(plan string, preferred string) bool {
 	preferred = normalizePreferredPlanType(preferred)
 	if preferred == "" {
 		return false
+	}
+	switch preferred {
+	case "pro_5x":
+		return PlanVariant(plan) == "pro_5x"
+	case "pro_20x":
+		return PlanVariant(plan) == "pro_20x"
 	}
 	return NormalizePlanType(plan) == preferred
 }

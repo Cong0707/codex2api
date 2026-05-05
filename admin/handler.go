@@ -2302,6 +2302,8 @@ type settingsResponse struct {
 	SchedulerPlanBonus               int     `json:"scheduler_plan_bonus"`
 	QuotaRatePlus                    float64 `json:"quota_rate_plus"`
 	QuotaRatePro                     float64 `json:"quota_rate_pro"`
+	QuotaRatePro5x                   float64 `json:"quota_rate_pro_5x"`
+	QuotaRatePro20x                  float64 `json:"quota_rate_pro_20x"`
 	QuotaRateTeam                    float64 `json:"quota_rate_team"`
 	MaxRetries                       int     `json:"max_retries"`
 	AllowRemoteMigration             bool    `json:"allow_remote_migration"`
@@ -2342,6 +2344,8 @@ type updateSettingsReq struct {
 	SchedulerPlanBonus               *int     `json:"scheduler_plan_bonus"`
 	QuotaRatePlus                    *float64 `json:"quota_rate_plus"`
 	QuotaRatePro                     *float64 `json:"quota_rate_pro"`
+	QuotaRatePro5x                   *float64 `json:"quota_rate_pro_5x"`
+	QuotaRatePro20x                  *float64 `json:"quota_rate_pro_20x"`
 	QuotaRateTeam                    *float64 `json:"quota_rate_team"`
 	MaxRetries                       *int     `json:"max_retries"`
 	AllowRemoteMigration             *bool    `json:"allow_remote_migration"`
@@ -2356,17 +2360,24 @@ func normalizeSchedulerPreferredPlan(raw string) (string, bool) {
 	case "", "off", "none", "disabled":
 		return "", true
 	}
-	normalized := auth.NormalizePlanType(trimmed)
-	switch normalized {
-	case "free", "plus", "pro", "team", "enterprise":
-		return normalized, true
+	switch trimmed {
+	case "pro_5x", "pro-5x", "pro5x", "prolite", "pro_lite", "pro-lite":
+		return "pro_5x", true
+	case "pro_20x", "pro-20x", "pro20x", "pro":
+		return "pro_20x", true
 	default:
-		return "", false
+		normalized := auth.NormalizePlanType(trimmed)
+		switch normalized {
+		case "free", "plus", "team", "enterprise":
+			return normalized, true
+		default:
+			return "", false
+		}
 	}
 }
 
-func defaultQuotaRates() (plus float64, pro float64, team float64) {
-	return 10, 100, 10
+func defaultQuotaRates() (plus float64, pro5x float64, pro20x float64, team float64) {
+	return 10, 25, 100, 10
 }
 
 func normalizeQuotaRate(value float64, fallback float64) (float64, bool) {
@@ -2389,18 +2400,24 @@ func (h *Handler) GetSettings(c *gin.Context) {
 	if dbSettings != nil && adminAuthSource != "env" {
 		adminSecret = dbSettings.AdminSecret
 	}
-	quotaRatePlus, quotaRatePro, quotaRateTeam := defaultQuotaRates()
+	quotaRatePlus, quotaRatePro5x, quotaRatePro20x, quotaRateTeam := defaultQuotaRates()
 	if dbSettings != nil {
 		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePlus, quotaRatePlus); ok {
 			quotaRatePlus = normalized
 		}
-		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro, quotaRatePro); ok {
-			quotaRatePro = normalized
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro5x, quotaRatePro5x); ok {
+			quotaRatePro5x = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro20x, quotaRatePro20x); ok {
+			quotaRatePro20x = normalized
+		} else if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro, quotaRatePro20x); ok {
+			quotaRatePro20x = normalized
 		}
 		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRateTeam, quotaRateTeam); ok {
 			quotaRateTeam = normalized
 		}
 	}
+	quotaRatePro := quotaRatePro20x // legacy alias
 	c.JSON(http.StatusOK, settingsResponse{
 		MaxConcurrency:                   h.store.GetMaxConcurrency(),
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
@@ -2429,6 +2446,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
 		QuotaRatePlus:                    quotaRatePlus,
 		QuotaRatePro:                     quotaRatePro,
+		QuotaRatePro5x:                   quotaRatePro5x,
+		QuotaRatePro20x:                  quotaRatePro20x,
 		QuotaRateTeam:                    quotaRateTeam,
 		MaxRetries:                       h.store.GetMaxRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
@@ -2451,19 +2470,25 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	}
 
 	currentAdminSecret := ""
-	quotaRatePlus, quotaRatePro, quotaRateTeam := defaultQuotaRates()
+	quotaRatePlus, quotaRatePro5x, quotaRatePro20x, quotaRateTeam := defaultQuotaRates()
 	if dbSettings, err := h.db.GetSystemSettings(c.Request.Context()); err == nil && dbSettings != nil {
 		currentAdminSecret = dbSettings.AdminSecret
 		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePlus, quotaRatePlus); ok {
 			quotaRatePlus = normalized
 		}
-		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro, quotaRatePro); ok {
-			quotaRatePro = normalized
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro5x, quotaRatePro5x); ok {
+			quotaRatePro5x = normalized
+		}
+		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro20x, quotaRatePro20x); ok {
+			quotaRatePro20x = normalized
+		} else if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRatePro, quotaRatePro20x); ok {
+			quotaRatePro20x = normalized
 		}
 		if normalized, ok := normalizeQuotaRate(dbSettings.QuotaRateTeam, quotaRateTeam); ok {
 			quotaRateTeam = normalized
 		}
 	}
+	quotaRatePro := quotaRatePro20x // legacy alias
 	if req.AdminSecret != nil {
 		if h.adminSecretEnv == "" {
 			currentAdminSecret = *req.AdminSecret
@@ -2652,7 +2677,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if req.SchedulerPreferredPlan != nil {
 		normalizedPlan, ok := normalizeSchedulerPreferredPlan(*req.SchedulerPreferredPlan)
 		if !ok {
-			writeError(c, http.StatusBadRequest, "scheduler_preferred_plan 仅支持 off/free/plus/pro/team/enterprise")
+			writeError(c, http.StatusBadRequest, "scheduler_preferred_plan 仅支持 off/free/plus/pro_5x/pro_20x/team/enterprise")
 			return
 		}
 		preferredPlan = normalizedPlan
@@ -2683,11 +2708,29 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		quotaRatePlus = normalized
 	}
 	if req.QuotaRatePro != nil {
-		normalized, ok := normalizeQuotaRate(*req.QuotaRatePro, quotaRatePro)
+		normalized, ok := normalizeQuotaRate(*req.QuotaRatePro, quotaRatePro20x)
 		if !ok {
 			writeError(c, http.StatusBadRequest, "quota_rate_pro 必须在 (0, 100000] 范围内")
 			return
 		}
+		quotaRatePro20x = normalized
+		quotaRatePro = normalized
+	}
+	if req.QuotaRatePro5x != nil {
+		normalized, ok := normalizeQuotaRate(*req.QuotaRatePro5x, quotaRatePro5x)
+		if !ok {
+			writeError(c, http.StatusBadRequest, "quota_rate_pro_5x 必须在 (0, 100000] 范围内")
+			return
+		}
+		quotaRatePro5x = normalized
+	}
+	if req.QuotaRatePro20x != nil {
+		normalized, ok := normalizeQuotaRate(*req.QuotaRatePro20x, quotaRatePro20x)
+		if !ok {
+			writeError(c, http.StatusBadRequest, "quota_rate_pro_20x 必须在 (0, 100000] 范围内")
+			return
+		}
+		quotaRatePro20x = normalized
 		quotaRatePro = normalized
 	}
 	if req.QuotaRateTeam != nil {
@@ -2778,6 +2821,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
 		QuotaRatePlus:                    quotaRatePlus,
 		QuotaRatePro:                     quotaRatePro,
+		QuotaRatePro5x:                   quotaRatePro5x,
+		QuotaRatePro20x:                  quotaRatePro20x,
 		QuotaRateTeam:                    quotaRateTeam,
 		MaxRetries:                       h.store.GetMaxRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && hasAdminSecret,
@@ -2830,6 +2875,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
 		QuotaRatePlus:                    quotaRatePlus,
 		QuotaRatePro:                     quotaRatePro,
+		QuotaRatePro5x:                   quotaRatePro5x,
+		QuotaRatePro20x:                  quotaRatePro20x,
 		QuotaRateTeam:                    quotaRateTeam,
 		MaxRetries:                       h.store.GetMaxRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
