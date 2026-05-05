@@ -1092,6 +1092,7 @@ type Store struct {
 	recoveryProbeInterval     int64 // 恢复探测最小间隔（ns）
 	plusPortEnabled           atomic.Bool
 	plusPortAccessFree        atomic.Bool
+	imageRoutePriority        atomic.Value // string: official_first / web_first
 	preferredPlanType         atomic.Value // string: free/plus/pro/team/enterprise 或空
 	preferredPlanBonus        int64        // 指定套餐额外调度加分
 	modelMapping              atomic.Value // string: {"anthropic_model":"codex_model", ...}
@@ -1159,6 +1160,22 @@ func normalizePreferredPlanType(plan string) string {
 	}
 }
 
+const (
+	ImageRoutePriorityOfficialFirst = "official_first"
+	ImageRoutePriorityWebFirst      = "web_first"
+)
+
+func NormalizeImageRoutePriority(priority string) string {
+	switch strings.ToLower(strings.TrimSpace(priority)) {
+	case ImageRoutePriorityWebFirst, "web", "webimage", "web_image", "reverse", "reverse_proxy":
+		return ImageRoutePriorityWebFirst
+	case ImageRoutePriorityOfficialFirst, "official", "api", "official_api":
+		return ImageRoutePriorityOfficialFirst
+	default:
+		return ImageRoutePriorityOfficialFirst
+	}
+}
+
 func clampPreferredPlanBonus(bonus int) int {
 	if bonus < 0 {
 		return 0
@@ -1217,6 +1234,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 			ProxyURL:                         "",
 			AutoCleanFullUsageMode:           AutoCleanFullUsageModeOff,
 			PlusPortAccessFree:               true,
+			ImageRoutePriority:               ImageRoutePriorityOfficialFirst,
 		}
 	}
 	s := &Store{
@@ -1246,6 +1264,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	s.autoCleanExpired.Store(settings.AutoCleanExpired)
 	s.plusPortEnabled.Store(settings.PlusPortEnabled)
 	s.plusPortAccessFree.Store(settings.PlusPortAccessFree)
+	s.imageRoutePriority.Store(NormalizeImageRoutePriority(settings.ImageRoutePriority))
 	s.preferredPlanType.Store(normalizePreferredPlanType(settings.SchedulerPreferredPlan))
 	atomic.StoreInt64(&s.preferredPlanBonus, int64(clampPreferredPlanBonus(settings.SchedulerPlanBonus)))
 	s.modelMapping.Store(settings.ModelMapping)
@@ -1390,6 +1409,24 @@ func (s *Store) GetPlusPortAccessFree() bool {
 		return true
 	}
 	return s.plusPortAccessFree.Load()
+}
+
+// SetImageRoutePriority 设置 Plus 端口图片调度优先级。
+func (s *Store) SetImageRoutePriority(priority string) {
+	if s == nil {
+		return
+	}
+	s.imageRoutePriority.Store(NormalizeImageRoutePriority(priority))
+}
+
+// GetImageRoutePriority 获取 Plus 端口图片调度优先级。
+func (s *Store) GetImageRoutePriority() string {
+	if s == nil {
+		return ImageRoutePriorityOfficialFirst
+	}
+	v := s.imageRoutePriority.Load()
+	priority, _ := v.(string)
+	return NormalizeImageRoutePriority(priority)
 }
 
 // GetPreferredPlanType 获取指定套餐优先调度配置

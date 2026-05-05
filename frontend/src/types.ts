@@ -245,6 +245,7 @@ export interface SystemSettings {
   fast_scheduler_enabled: boolean
   plus_port_enabled: boolean
   plus_port_access_free: boolean
+  image_route_priority: 'official_first' | 'web_first' | string
   scheduler_preferred_plan: string
   scheduler_plan_bonus: number
   quota_rate_plus: number

@@ -127,24 +127,50 @@ func multipartFileToDataURL(fileHeader *multipart.FileHeader) (string, error) {
 	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
-func (h *Handler) imageRoutingForCurrentPort(c *gin.Context) (webAllowed bool, officialAllowed bool) {
+type imageRoutePlan struct {
+	WebAllowed      bool
+	OfficialAllowed bool
+	PreferOfficial  bool
+}
+
+func (h *Handler) imageRoutingForCurrentPort(c *gin.Context) imageRoutePlan {
 	if h == nil || h.store == nil || h.cfg == nil || c == nil || c.Request == nil || !h.shouldApplyPlusPortPolicy() {
-		return true, true
+		// 未启用 Plus 端口策略时保持历史行为：先走网页反代，失败后再走官方 API。
+		return imageRoutePlan{WebAllowed: true, OfficialAllowed: true, PreferOfficial: false}
 	}
 	reqPort := resolveRequestPort(c.Request)
 	if reqPort <= 0 {
-		return true, true
+		return imageRoutePlan{WebAllowed: true, OfficialAllowed: true, PreferOfficial: false}
 	}
 	switch reqPort {
 	case h.cfg.Port:
 		// 主端口定位为免费端口：图片只走 ChatGPT Web 反代额度，不回退官方 API。
-		return true, false
+		return imageRoutePlan{WebAllowed: true, OfficialAllowed: false, PreferOfficial: false}
 	case h.cfg.Port + 1:
-		// Plus 端口定位为付费官方 API；是否把反代额度也纳入调度，由“Plus 端口访问 free”开关控制。
-		return h.store.GetPlusPortAccessFree(), true
+		// Plus 端口定位为付费官方 API；关闭“Plus 端口访问 free”时只允许官方 API。
+		priority := h.store.GetImageRoutePriority()
+		return imageRoutePlan{
+			WebAllowed:      h.store.GetPlusPortAccessFree(),
+			OfficialAllowed: true,
+			PreferOfficial:  priority != auth.ImageRoutePriorityWebFirst,
+		}
 	default:
-		return true, true
+		return imageRoutePlan{WebAllowed: true, OfficialAllowed: true, PreferOfficial: false}
 	}
+}
+
+func shouldFallbackToWebAfterOfficialImageFailure(state *webImageFallbackState) bool {
+	if state == nil {
+		return true
+	}
+	if state.LastStatusCode == 0 {
+		return state.LastErr == nil || classifyTransportFailure(state.LastErr) != "" || IsRetryableError(state.LastErr)
+	}
+	switch state.LastStatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusPaymentRequired, http.StatusTooManyRequests:
+		return true
+	}
+	return state.LastStatusCode >= 500
 }
 
 func (h *Handler) writeNoAvailableImageRoute(c *gin.Context, message string) {
@@ -168,6 +194,53 @@ func (h *Handler) forwardOfficialImagesOrFallback(c *gin.Context, endpoint, imag
 		return
 	}
 	h.forwardImagesRequestWithMatcher(c, endpoint, imageModel, responsesBody, responseFormat, streamPrefix, stream, officialImageAccountMatcher)
+}
+
+func (h *Handler) handleImagesWithRouting(c *gin.Context, route imageRoutePlan, endpoint, imageModel string, responsesBody []byte, responseFormat, streamPrefix string, stream bool, webAttempt func() (bool, *webImageFallbackState)) {
+	var state *webImageFallbackState
+
+	if route.PreferOfficial {
+		if route.OfficialAllowed {
+			if handled, officialState := h.tryForwardImagesRequestWithMatcher(c, endpoint, imageModel, responsesBody, responseFormat, streamPrefix, stream, officialImageAccountMatcher); handled {
+				return
+			} else {
+				state = officialState
+			}
+			if !route.WebAllowed || !shouldFallbackToWebAfterOfficialImageFailure(state) {
+				if h.writeWebFallbackState(c, state) {
+					return
+				}
+				h.writeNoAvailableImageRoute(c, "当前端口仅允许使用官方 API 图片额度，且没有可用官方图片账号")
+				return
+			}
+		}
+
+		if route.WebAllowed && webAttempt != nil {
+			if handled, webState := webAttempt(); handled {
+				return
+			} else if webState != nil {
+				state = webState
+			}
+		}
+		if h.writeWebFallbackState(c, state) {
+			return
+		}
+		if route.WebAllowed {
+			h.writeNoAvailableImageRoute(c, "无可用图片账号，请稍后重试")
+		} else {
+			h.writeNoAvailableImageRoute(c, "当前端口仅允许使用官方 API 图片额度，且没有可用官方图片账号")
+		}
+		return
+	}
+
+	if route.WebAllowed && webAttempt != nil {
+		if handled, webState := webAttempt(); handled {
+			return
+		} else {
+			state = webState
+		}
+	}
+	h.forwardOfficialImagesOrFallback(c, endpoint, imageModel, responsesBody, responseFormat, streamPrefix, stream, state, route.OfficialAllowed)
 }
 
 func (h *Handler) ImagesGenerations(c *gin.Context) {
@@ -223,10 +296,9 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, nil, tool)
-	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
-	var state *webImageFallbackState
-	if webAllowed {
-		if handled, webState := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+	route := h.imageRoutingForCurrentPort(c)
+	h.handleImagesWithRouting(c, route, "/v1/images/generations", imageModel, responsesBody, responseFormat, "image_generation", stream, func() (bool, *webImageFallbackState) {
+		return h.tryHandleWebImagesRequest(c, webImageForwardSpec{
 			InboundEndpoint: "/v1/images/generations",
 			RequestModel:    imageModel,
 			Prompt:          prompt,
@@ -235,13 +307,8 @@ func (h *Handler) ImagesGenerations(c *gin.Context) {
 			Stream:          stream,
 			N:               int(n),
 			ResponsesBody:   responsesBody,
-		}); handled {
-			return
-		} else {
-			state = webState
-		}
-	}
-	h.forwardOfficialImagesOrFallback(c, "/v1/images/generations", imageModel, responsesBody, responseFormat, "image_generation", stream, state, officialAllowed)
+		})
+	})
 }
 
 func (h *Handler) ImagesEdits(c *gin.Context) {
@@ -328,9 +395,9 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 
 	tool := buildImagesEditToolFromForm(c, imageModel, maskDataURL)
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
-	var state *webImageFallbackState
-	if webAllowed && strings.TrimSpace(maskDataURL) == "" {
+	route := h.imageRoutingForCurrentPort(c)
+	var webAttempt func() (bool, *webImageFallbackState)
+	if strings.TrimSpace(maskDataURL) == "" {
 		refs := make([]webimage.ReferenceImage, 0, len(imageFiles))
 		for _, fileHeader := range imageFiles {
 			ref, refErr := multipartFileHeaderToReferenceImage(fileHeader)
@@ -341,24 +408,22 @@ func (h *Handler) imagesEditsFromMultipart(c *gin.Context) {
 			refs = append(refs, ref)
 		}
 		if len(refs) == len(imageFiles) && len(refs) > 0 {
-			if handled, webState := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
-				InboundEndpoint: "/v1/images/edits",
-				RequestModel:    imageModel,
-				Prompt:          prompt,
-				References:      refs,
-				ResponseFormat:  responseFormat,
-				StreamPrefix:    "image_edit",
-				Stream:          stream,
-				N:               int(n),
-				ResponsesBody:   responsesBody,
-			}); handled {
-				return
-			} else {
-				state = webState
+			webAttempt = func() (bool, *webImageFallbackState) {
+				return h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+					InboundEndpoint: "/v1/images/edits",
+					RequestModel:    imageModel,
+					Prompt:          prompt,
+					References:      refs,
+					ResponseFormat:  responseFormat,
+					StreamPrefix:    "image_edit",
+					Stream:          stream,
+					N:               int(n),
+					ResponsesBody:   responsesBody,
+				})
 			}
 		}
 	}
-	h.forwardOfficialImagesOrFallback(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, state, officialAllowed)
+	h.handleImagesWithRouting(c, route, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, webAttempt)
 }
 
 func buildImagesEditToolFromForm(c *gin.Context, imageModel, maskDataURL string) []byte {
@@ -463,28 +528,26 @@ func (h *Handler) imagesEditsFromJSON(c *gin.Context) {
 	}
 
 	responsesBody := buildImagesResponsesRequest(prompt, images, tool)
-	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
-	var state *webImageFallbackState
-	if webAllowed && maskDataURL == "" {
+	route := h.imageRoutingForCurrentPort(c)
+	var webAttempt func() (bool, *webImageFallbackState)
+	if maskDataURL == "" {
 		if refs, refErr := webReferencesFromImageURLs(images); refErr == nil && len(refs) > 0 {
-			if handled, webState := h.tryHandleWebImagesRequest(c, webImageForwardSpec{
-				InboundEndpoint: "/v1/images/edits",
-				RequestModel:    imageModel,
-				Prompt:          prompt,
-				References:      refs,
-				ResponseFormat:  responseFormat,
-				StreamPrefix:    "image_edit",
-				Stream:          stream,
-				N:               int(n),
-				ResponsesBody:   responsesBody,
-			}); handled {
-				return
-			} else {
-				state = webState
+			webAttempt = func() (bool, *webImageFallbackState) {
+				return h.tryHandleWebImagesRequest(c, webImageForwardSpec{
+					InboundEndpoint: "/v1/images/edits",
+					RequestModel:    imageModel,
+					Prompt:          prompt,
+					References:      refs,
+					ResponseFormat:  responseFormat,
+					StreamPrefix:    "image_edit",
+					Stream:          stream,
+					N:               int(n),
+					ResponsesBody:   responsesBody,
+				})
 			}
 		}
 	}
-	h.forwardOfficialImagesOrFallback(c, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, state, officialAllowed)
+	h.handleImagesWithRouting(c, route, "/v1/images/edits", imageModel, responsesBody, responseFormat, "image_edit", stream, webAttempt)
 }
 
 func buildImagesResponsesRequest(prompt string, images []string, toolJSON []byte) []byte {
@@ -787,16 +850,22 @@ func writeChatCompletionsImageStream(c *gin.Context, model, chunkID string, crea
 }
 
 func (h *Handler) handleChatCompletionsImageFallback(c *gin.Context, rawBody []byte, model string) {
-	webAllowed, officialAllowed := h.imageRoutingForCurrentPort(c)
+	route := h.imageRoutingForCurrentPort(c)
 	var state *webImageFallbackState
-	if webAllowed {
+
+	if route.PreferOfficial && route.OfficialAllowed && h.hasAvailableAccountForMatcher(c, officialImageAccountMatcher) {
+		h.handleChatCompletionsImageFallbackWithMatcher(c, rawBody, model, officialImageAccountMatcher)
+		return
+	}
+
+	if route.WebAllowed {
 		if handled, webState := h.tryHandleWebChatCompletionsImageRequest(c, rawBody, model); handled {
 			return
 		} else {
 			state = webState
 		}
 	}
-	if !officialAllowed {
+	if !route.OfficialAllowed {
 		if h.writeWebFallbackState(c, state) {
 			return
 		}
@@ -1023,6 +1092,15 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 }
 
 func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoint, requestModel string, responsesBody []byte, responseFormat, streamPrefix string, stream bool, extraMatcher auth.AccountMatcher) {
+	if handled, state := h.tryForwardImagesRequestWithMatcher(c, inboundEndpoint, requestModel, responsesBody, responseFormat, streamPrefix, stream, extraMatcher); handled {
+		return
+	} else if h.writeWebFallbackState(c, state) {
+		return
+	}
+	h.writeNoAvailableImageRoute(c, "无可用官方图片账号，请稍后重试")
+}
+
+func (h *Handler) tryForwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoint, requestModel string, responsesBody []byte, responseFormat, streamPrefix string, stream bool, extraMatcher auth.AccountMatcher) (bool, *webImageFallbackState) {
 	requestStartedAt := requestStartTime(c)
 	apiKey := requestAPIKeyFromHeaders(c.Request.Header)
 	sessionID := ResolveSessionID(c.Request.Header, responsesBody)
@@ -1033,18 +1111,20 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 	var lastStatusCode int
 	var lastBody []byte
 	excludeAccounts := make(map[int64]bool)
+	state := &webImageFallbackState{}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attemptAcquireStartedAt := time.Now()
 		account, stickyProxyURL := h.acquireAccountForRequestWithMatcherAndAffinity(c, affinityKey, excludeAccounts, extraMatcher)
 		attemptAcquireMs := int(time.Since(attemptAcquireStartedAt).Milliseconds())
 		if account == nil {
-			if lastStatusCode == http.StatusTooManyRequests && len(lastBody) > 0 {
-				h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
-				return
+			if lastStatusCode != 0 && len(lastBody) > 0 {
+				state.LastStatusCode = lastStatusCode
+				state.LastBody = lastBody
+			} else if lastErr != nil {
+				state.LastErr = lastErr
 			}
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": "无可用账号，请稍后重试", "type": "server_error"}})
-			return
+			return false, state
 		}
 
 		start := time.Now()
@@ -1078,10 +1158,11 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			excludeAccounts[account.ID()] = true
 			if !IsRetryableError(reqErr) && classifyTransportFailure(reqErr) == "" {
-				ErrorToGinResponse(c, reqErr)
-				return
+				state.LastErr = reqErr
+				return false, state
 			}
 			lastErr = reqErr
+			state.LastErr = reqErr
 			continue
 		}
 
@@ -1099,11 +1180,12 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 			h.applyCooldown(account, resp.StatusCode, errBody, resp)
 			lastStatusCode = resp.StatusCode
 			lastBody = errBody
+			state.LastStatusCode = resp.StatusCode
+			state.LastBody = errBody
 			if isRetryableStatus(resp.StatusCode, errBody) && attempt < maxRetries {
 				continue
 			}
-			h.sendFinalUpstreamError(c, resp.StatusCode, errBody)
-			return
+			return false, state
 		}
 
 		h.store.BindSessionAffinity(affinityKey, account, proxyURL)
@@ -1126,8 +1208,6 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 			out, usage, imageCount, officialAvailable, officialKnown, readErr = collectImagesResponse(resp.Body, responseFormat, requestModel)
 			if readErr == nil {
 				c.Data(http.StatusOK, "application/json", out)
-			} else {
-				c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"message": readErr.Error(), "type": "upstream_error"}})
 			}
 		}
 
@@ -1183,14 +1263,23 @@ func (h *Handler) forwardImagesRequestWithMatcher(c *gin.Context, inboundEndpoin
 			h.store.ReportRequestSuccess(account, time.Duration(logInput.DurationMs)*time.Millisecond)
 		}
 		h.store.Release(account)
-		return
+		if readErr != nil {
+			state.LastErr = readErr
+			if c.Writer.Written() {
+				return true, state
+			}
+			return false, state
+		}
+		return true, nil
 	}
 
 	if lastErr != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"message": "上游请求失败: " + lastErr.Error(), "type": "upstream_error"}})
+		state.LastErr = lastErr
 	} else if lastStatusCode != 0 {
-		h.sendFinalUpstreamError(c, lastStatusCode, lastBody)
+		state.LastStatusCode = lastStatusCode
+		state.LastBody = lastBody
 	}
+	return false, state
 }
 
 func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string) ([]byte, *UsageInfo, int, int, bool, error) {

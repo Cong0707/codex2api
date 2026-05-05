@@ -54,6 +54,10 @@ export default function Settings() {
     { label: t('settings.autoCleanFullUsageModeDelete'), value: 'delete' },
     { label: t('settings.autoCleanFullUsageModeWait'), value: 'wait' },
   ]
+  const imageRoutePriorityOptions = [
+    { label: t('settings.imageRoutePriorityOfficialFirst'), value: 'official_first' },
+    { label: t('settings.imageRoutePriorityWebFirst'), value: 'web_first' },
+  ]
   const [newKeyName, setNewKeyName] = useState('')
   const [newKeyValue, setNewKeyValue] = useState('')
   const [createdKey, setCreatedKey] = useState<string | null>(null)
@@ -86,6 +90,7 @@ export default function Settings() {
     fast_scheduler_enabled: false,
     plus_port_enabled: false,
     plus_port_access_free: true,
+    image_route_priority: 'official_first',
     scheduler_preferred_plan: '',
     scheduler_plan_bonus: 0,
     quota_rate_plus: 10,
@@ -126,6 +131,7 @@ export default function Settings() {
       auto_clean_full_usage: fullUsageMode !== 'off',
       plus_port_enabled: settings.plus_port_enabled ?? false,
       plus_port_access_free: settings.plus_port_access_free ?? true,
+      image_route_priority: settings.image_route_priority ?? 'official_first',
       scheduler_preferred_plan: settings.scheduler_preferred_plan ?? '',
       scheduler_plan_bonus: settings.scheduler_plan_bonus ?? 0,
       quota_rate_plus: settings.quota_rate_plus ?? 10,
@@ -302,6 +308,7 @@ export default function Settings() {
         auto_clean_full_usage: fullUsageMode !== 'off',
         plus_port_enabled: updated.plus_port_enabled ?? false,
         plus_port_access_free: updated.plus_port_access_free ?? true,
+        image_route_priority: updated.image_route_priority ?? 'official_first',
         scheduler_preferred_plan: updated.scheduler_preferred_plan ?? '',
         scheduler_plan_bonus: updated.scheduler_plan_bonus ?? 0,
         quota_rate_plus: updated.quota_rate_plus ?? 10,
@@ -954,6 +961,16 @@ export default function Settings() {
                   options={booleanOptions}
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('settings.plusPortAccessFreeDesc')}</p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.imageRoutePriority')}</label>
+                <Select
+                  value={settingsForm.image_route_priority || 'official_first'}
+                  disabled={!settingsForm.plus_port_enabled}
+                  onValueChange={(value) => setSettingsForm((f) => ({ ...f, image_route_priority: value }))}
+                  options={imageRoutePriorityOptions}
+                />
+                <p className="text-xs text-muted-foreground mt-1">{t('settings.imageRoutePriorityDesc')}</p>
               </div>
               <div>
                 <label className="block mb-2 text-sm font-semibold text-muted-foreground">{t('settings.schedulerPreferredPlan')}</label>

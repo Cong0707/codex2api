@@ -2294,6 +2294,7 @@ type settingsResponse struct {
 	FastSchedulerEnabled             bool    `json:"fast_scheduler_enabled"`
 	PlusPortEnabled                  bool    `json:"plus_port_enabled"`
 	PlusPortAccessFree               bool    `json:"plus_port_access_free"`
+	ImageRoutePriority               string  `json:"image_route_priority"`
 	SchedulerPreferredPlan           string  `json:"scheduler_preferred_plan"`
 	SchedulerPlanBonus               int     `json:"scheduler_plan_bonus"`
 	QuotaRatePlus                    float64 `json:"quota_rate_plus"`
@@ -2333,6 +2334,7 @@ type updateSettingsReq struct {
 	FastSchedulerEnabled             *bool    `json:"fast_scheduler_enabled"`
 	PlusPortEnabled                  *bool    `json:"plus_port_enabled"`
 	PlusPortAccessFree               *bool    `json:"plus_port_access_free"`
+	ImageRoutePriority               *string  `json:"image_route_priority"`
 	SchedulerPreferredPlan           *string  `json:"scheduler_preferred_plan"`
 	SchedulerPlanBonus               *int     `json:"scheduler_plan_bonus"`
 	QuotaRatePlus                    *float64 `json:"quota_rate_plus"`
@@ -2419,6 +2421,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
 		PlusPortEnabled:                  h.store.GetPlusPortEnabled(),
 		PlusPortAccessFree:               h.store.GetPlusPortAccessFree(),
+		ImageRoutePriority:               h.store.GetImageRoutePriority(),
 		SchedulerPreferredPlan:           h.store.GetPreferredPlanType(),
 		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
 		QuotaRatePlus:                    quotaRatePlus,
@@ -2634,6 +2637,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		h.store.SetPlusPortAccessFree(*req.PlusPortAccessFree)
 		log.Printf("设置已更新: plus_port_access_free = %t", *req.PlusPortAccessFree)
 	}
+	if req.ImageRoutePriority != nil {
+		normalizedPriority := auth.NormalizeImageRoutePriority(*req.ImageRoutePriority)
+		h.store.SetImageRoutePriority(normalizedPriority)
+		log.Printf("设置已更新: image_route_priority = %s", normalizedPriority)
+	}
 
 	preferredPlan := h.store.GetPreferredPlanType()
 	preferredBonus := h.store.GetPreferredPlanBonus()
@@ -2762,6 +2770,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
 		PlusPortEnabled:                  h.store.GetPlusPortEnabled(),
 		PlusPortAccessFree:               h.store.GetPlusPortAccessFree(),
+		ImageRoutePriority:               h.store.GetImageRoutePriority(),
 		SchedulerPreferredPlan:           h.store.GetPreferredPlanType(),
 		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
 		QuotaRatePlus:                    quotaRatePlus,
@@ -2813,6 +2822,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
 		PlusPortEnabled:                  h.store.GetPlusPortEnabled(),
 		PlusPortAccessFree:               h.store.GetPlusPortAccessFree(),
+		ImageRoutePriority:               h.store.GetImageRoutePriority(),
 		SchedulerPreferredPlan:           h.store.GetPreferredPlanType(),
 		SchedulerPlanBonus:               h.store.GetPreferredPlanBonus(),
 		QuotaRatePlus:                    quotaRatePlus,
