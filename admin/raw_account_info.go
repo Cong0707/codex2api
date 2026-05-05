@@ -329,7 +329,7 @@ func resolveCliproxyProfile(row *database.AccountRow) cliproxyProfile {
 	plan := ""
 	planSource := ""
 	applyPlan := func(candidate string, source string) {
-		candidate = auth.NormalizePlanType(candidate)
+		candidate = normalizeStoredPlanType(candidate)
 		if candidate == "" {
 			return
 		}
@@ -384,7 +384,7 @@ func resolveRuntimeProfile(account *auth.Account) cliproxyProfile {
 	return cliproxyProfile{
 		Email:      strings.TrimSpace(account.Email),
 		AccountID:  strings.TrimSpace(account.AccountID),
-		PlanType:   auth.NormalizePlanType(account.PlanType),
+		PlanType:   normalizeStoredPlanType(account.PlanType),
 		PlanSource: "runtime.account",
 	}
 }
@@ -439,7 +439,7 @@ func detectPlanFromPayload(endpoint string, raw []byte) (string, string) {
 	bestSource := ""
 
 	apply := func(candidatePlan string, suffix string) {
-		candidatePlan = auth.NormalizePlanType(candidatePlan)
+		candidatePlan = normalizeStoredPlanType(candidatePlan)
 		if candidatePlan == "" {
 			return
 		}
@@ -493,13 +493,13 @@ func detectPlanFromMeOrgSettings(value any) (string, bool) {
 		if settings, ok := org["settings"].(map[string]any); ok {
 			if workspacePlan, ok := settings["workspace_plan_type"].(string); ok {
 				if isPlanBetter(best, workspacePlan) {
-					best = auth.NormalizePlanType(workspacePlan)
+					best = normalizeStoredPlanType(workspacePlan)
 				}
 			}
 		}
 		if orgPlan, ok := org["plan_type"].(string); ok {
 			if isPlanBetter(best, orgPlan) {
-				best = auth.NormalizePlanType(orgPlan)
+				best = normalizeStoredPlanType(orgPlan)
 			}
 		}
 	}
@@ -584,7 +584,39 @@ func isPlanBetter(current, candidate string) bool {
 	if currentNorm == "" {
 		return true
 	}
-	return auth.PreferPlanType(currentNorm, candidateNorm) == candidateNorm && currentNorm != candidateNorm
+	if auth.PreferPlanType(currentNorm, candidateNorm) == candidateNorm && currentNorm != candidateNorm {
+		return true
+	}
+	if currentNorm == candidateNorm {
+		return planSpecificity(candidate) > planSpecificity(current)
+	}
+	return false
+}
+
+func normalizeStoredPlanType(plan string) string {
+	return strings.ToLower(strings.TrimSpace(plan))
+}
+
+func compactStoredPlanType(plan string) string {
+	text := normalizeStoredPlanType(plan)
+	text = strings.ReplaceAll(text, "_", "")
+	text = strings.ReplaceAll(text, "-", "")
+	text = strings.ReplaceAll(text, " ", "")
+	return text
+}
+
+func planSpecificity(plan string) int {
+	text := compactStoredPlanType(plan)
+	switch {
+	case text == "":
+		return 0
+	case text == "prolite", strings.Contains(text, "5x"), strings.Contains(text, "20x"):
+		return 2
+	case auth.NormalizePlanType(plan) != normalizeStoredPlanType(plan):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func mergeAuthCredentialRefresh(profile cliproxyProfile, upstream map[string]string) (map[string]string, map[string]interface{}) {
@@ -634,12 +666,15 @@ func mergeCredentialRefresh(profile cliproxyProfile, upstream map[string]string,
 		updates["account_id"] = accountID
 	}
 
-	quotaPlan := auth.NormalizePlanType(strings.TrimSpace(detectedPlan))
+	quotaPlan := normalizeStoredPlanType(detectedPlan)
 	if candidate := strings.TrimSpace(upstream["plan_type"]); candidate != "" {
-		quotaPlan = auth.PreferPlanType(quotaPlan, candidate)
+		candidate = normalizeStoredPlanType(candidate)
+		if quotaPlan == "" || isPlanBetter(quotaPlan, candidate) {
+			quotaPlan = candidate
+		}
 	}
 
-	selectedPlan := auth.NormalizePlanType(strings.TrimSpace(currentPlan))
+	selectedPlan := normalizeStoredPlanType(currentPlan)
 	if quotaPlan != "" {
 		selectedPlan = quotaPlan
 	}
@@ -711,9 +746,9 @@ func extractCredentialUpdatesFromRawInfo(rawBody []byte) (map[string]string, map
 		updates["account_id"] = strings.TrimSpace(accountID)
 	}
 	if strings.TrimSpace(planTypeRaw) != "" {
-		normalizedPlan := auth.NormalizePlanType(planTypeRaw)
-		refreshed["plan_type"] = normalizedPlan
-		updates["plan_type"] = normalizedPlan
+		plan := normalizeStoredPlanType(planTypeRaw)
+		refreshed["plan_type"] = plan
+		updates["plan_type"] = plan
 	}
 
 	return refreshed, updates
@@ -760,6 +795,6 @@ func applyRawInfoToRuntimeAccount(account *auth.Account, refreshed map[string]st
 		account.AccountID = accountID
 	}
 	if planType := strings.TrimSpace(refreshed["plan_type"]); planType != "" {
-		account.PlanType = auth.NormalizePlanType(planType)
+		account.PlanType = normalizeStoredPlanType(planType)
 	}
 }

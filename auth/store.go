@@ -1808,7 +1808,7 @@ func (s *Store) loadFromDB(ctx context.Context) error {
 			account.AccessToken = at
 			account.AccountID = row.GetCredential("account_id")
 			account.Email = row.GetCredential("email")
-			account.PlanType = NormalizePlanType(row.GetCredential("plan_type"))
+			account.PlanType = strings.ToLower(strings.TrimSpace(row.GetCredential("plan_type")))
 			account.HealthTier = HealthTierHealthy
 			if expiresAt := row.GetCredential("expires_at"); expiresAt != "" {
 				if parsed, err := time.Parse(time.RFC3339, expiresAt); err == nil {

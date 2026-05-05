@@ -85,6 +85,8 @@ type QuotaRateConfig = {
   team: number
 }
 
+type PlanFilterValue = 'all' | 'pro_20x' | 'pro_5x' | 'plus' | 'team' | 'free'
+
 type QuotaStatsFree = {
   accountCount: number
   quotaTotal: number
@@ -130,8 +132,49 @@ function normalizeRate(value: number, fallback: number): number {
   return value
 }
 
+function compactPlanType(planType?: string): string {
+  return (planType || '').toLowerCase().trim().replace(/[_\-\s]/g, '')
+}
+
+function normalizePlanForBehavior(planType?: string): string {
+  const compact = compactPlanType(planType)
+  if (!compact) return ''
+  if (compact.includes('enterprise')) return 'enterprise'
+  if (compact.includes('team') || compact.includes('business') || compact === 'go') return 'team'
+  if (compact.includes('pro')) return 'pro'
+  if (compact.includes('plus')) return 'plus'
+  if (compact.includes('free')) return 'free'
+  return compact
+}
+
+function normalizePlanFilterValue(planType?: string): Exclude<PlanFilterValue, 'all'> | string {
+  const compact = compactPlanType(planType)
+  if (!compact) return ''
+  if (compact === 'prolite' || compact.includes('pro5x') || compact.includes('5x')) return 'pro_5x'
+  if (compact === 'pro' || compact.includes('pro20x') || compact.includes('20x')) return 'pro_20x'
+  return normalizePlanForBehavior(planType)
+}
+
+function formatPlanLabel(planType?: string): string {
+  const filterValue = normalizePlanFilterValue(planType)
+  switch (filterValue) {
+    case 'pro_5x':
+      return 'Pro 5x'
+    case 'pro_20x':
+      return 'Pro 20x'
+    case 'plus':
+      return 'Plus'
+    case 'team':
+      return 'Team'
+    case 'free':
+      return 'Free'
+    default:
+      return (planType || '').trim() || '-'
+  }
+}
+
 function resolvePlanWeight(planType: string | undefined, rates: QuotaRateConfig): number {
-  const plan = (planType || '').toLowerCase()
+  const plan = normalizePlanForBehavior(planType)
   if (plan === 'pro') return rates.pro
   if (plan === 'plus') return rates.plus
   if (plan === 'team') return rates.team
@@ -248,7 +291,7 @@ function calcImageQuotaStats(accounts: AccountRow[]): ImageQuotaStats {
   let remainingImageTotal = 0
 
   for (const account of accounts) {
-    const plan = (account.plan_type || '').toLowerCase()
+    const plan = normalizePlanForBehavior(account.plan_type)
     const webTotal = safeImageCount(account.image_web_total)
     const webRemaining = safeImageCount(account.image_web_remaining)
     if (plan === 'free') {
@@ -295,7 +338,7 @@ export default function Accounts() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'rate_limited' | 'full_usage' | 'banned' | 'locked'>('all')
   const [imageStatusFilter, setImageStatusFilter] = useState<'all' | 'active' | 'full_usage'>('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [planFilter, setPlanFilter] = useState<'all' | 'plus' | 'pro' | 'team' | 'free'>('all')
+  const [planFilter, setPlanFilter] = useState<PlanFilterValue>('all')
   const [sortKey, setSortKey] = useState<'requests' | 'usage' | 'importTime' | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [addForm, setAddForm] = useState<AddAccountRequest>({
@@ -394,7 +437,7 @@ export default function Accounts() {
 
   useEffect(() => {
     const hasMissingUsage = accounts.some(
-      (account) => account.plan_type?.toLowerCase() === 'free' && (account.usage_percent_7d === null || account.usage_percent_7d === undefined)
+      (account) => normalizePlanForBehavior(account.plan_type) === 'free' && (account.usage_percent_7d === null || account.usage_percent_7d === undefined)
     )
     if (!hasMissingUsage || usageBootstrapReloadedRef.current) {
       return
@@ -425,8 +468,8 @@ export default function Accounts() {
   const warmAccounts = accounts.filter((account) => account.health_tier === 'warm').length
   const riskyAccounts = accounts.filter((account) => account.health_tier === 'risky').length
   const quotaSourceAccounts = accounts.filter((account) => (account.status || '').toLowerCase() !== 'unauthorized')
-  const freeQuotaAccounts = quotaSourceAccounts.filter((account) => (account.plan_type || '').toLowerCase() === 'free')
-  const paidQuotaAccounts = quotaSourceAccounts.filter((account) => (account.plan_type || '').toLowerCase() !== 'free')
+  const freeQuotaAccounts = quotaSourceAccounts.filter((account) => normalizePlanForBehavior(account.plan_type) === 'free')
+  const paidQuotaAccounts = quotaSourceAccounts.filter((account) => normalizePlanForBehavior(account.plan_type) !== 'free')
   const freeQuotaStats = calcFreeQuotaStats(freeQuotaAccounts, quotaRates)
   const paidQuotaStats = calcWindowedQuotaStats(paidQuotaAccounts, quotaRates)
   const imageQuotaStats = calcImageQuotaStats(quotaSourceAccounts)
@@ -484,7 +527,7 @@ export default function Accounts() {
     }
     // 套餐过滤
     if (planFilter !== 'all') {
-      const plan = (account.plan_type || '').toLowerCase()
+      const plan = normalizePlanFilterValue(account.plan_type)
       if (plan !== planFilter) return false
     }
     // 搜索过滤
@@ -1388,7 +1431,7 @@ export default function Accounts() {
             />
           </div>
           <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5">
-            {(['all', 'plus', 'pro', 'team', 'free'] as const).map((key) => (
+            {(['all', 'pro_20x', 'pro_5x', 'plus', 'team', 'free'] as const).map((key) => (
               <button
                 key={key}
                 onClick={() => { setPlanFilter(key); setPage(1) }}
@@ -1398,7 +1441,7 @@ export default function Accounts() {
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
-                {key === 'all' ? t('accounts.filterAll') : key.charAt(0).toUpperCase() + key.slice(1)}
+                {key === 'all' ? t('accounts.filterAll') : key === 'pro_20x' ? 'Pro 20x' : key === 'pro_5x' ? 'Pro 5x' : key.charAt(0).toUpperCase() + key.slice(1)}
               </button>
             ))}
           </div>
@@ -1552,7 +1595,7 @@ export default function Accounts() {
                         <TableCell
                           className="text-[13px] font-medium"
                         >
-                          {account.plan_type || '-'}
+                          {formatPlanLabel(account.plan_type)}
                         </TableCell>
                         <TableCell>
                           <div className="space-y-1">
@@ -2593,7 +2636,7 @@ function ImageQuotaBar({
 
 // 用量列组件
 function UsageCell({ account, t }: { account: AccountRow; t: (key: string, options?: Record<string, unknown>) => string }) {
-  const plan = (account.plan_type || '').toLowerCase()
+  const plan = normalizePlanForBehavior(account.plan_type)
   const has7d = account.usage_percent_7d !== null && account.usage_percent_7d !== undefined
   const has5h = account.usage_percent_5h !== null && account.usage_percent_5h !== undefined
   const hasImageWebRemaining = account.image_web_remaining !== null && account.image_web_remaining !== undefined

@@ -116,6 +116,29 @@ func TestDetectPlanFromPayload_MeSubscriptionFlag(t *testing.T) {
 	}
 }
 
+func TestDetectPlanFromPayload_PreservesProlitePlan(t *testing.T) {
+	raw := []byte(`{"plan_type":"prolite"}`)
+
+	plan, source := detectPlanFromPayload(openAIWhamUsageURL, raw)
+	if plan != "prolite" {
+		t.Fatalf("plan = %q, want prolite", plan)
+	}
+	if source == "" {
+		t.Fatal("source should not be empty")
+	}
+}
+
+func TestMergeCredentialRefresh_PreservesProliteOverGenericPro(t *testing.T) {
+	refreshed, updates := mergeCredentialRefresh(cliproxyProfile{}, map[string]string{"plan_type": "prolite"}, "pro", "")
+
+	if got := refreshed["plan_type"]; got != "prolite" {
+		t.Fatalf("refreshed plan_type = %q, want prolite", got)
+	}
+	if got, _ := updates["plan_type"].(string); got != "prolite" {
+		t.Fatalf("updates plan_type = %q, want prolite", got)
+	}
+}
+
 func TestPickBestPlanSnapshot_FallbackToErrorBody(t *testing.T) {
 	snapshots := []openAISnapshot{
 		{

@@ -603,7 +603,7 @@ func parseCompatEntry(entry map[string]interface{}) compatEntry {
 			}
 		}
 	}
-	parsed.planType = auth.NormalizePlanType(parsed.planType)
+	parsed.planType = normalizeStoredPlanType(parsed.planType)
 
 	return parsed
 }

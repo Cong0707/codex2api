@@ -98,6 +98,7 @@ export default function Usage() {
   const [filterStream, setFilterStream] = useState<'' | 'true' | 'false'>('')
   const [apiKeys, setAPIKeys] = useState<APIKeyRow[]>([])
   const [apiKeyLoadFailed, setAPIKeyLoadFailed] = useState(false)
+  const [modelOptions, setModelOptions] = useState<string[]>([])
   const showFastFilter = false
   const PAGE_SIZE = 20
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(null)
@@ -136,6 +137,16 @@ export default function Usage() {
     }
   }, [])
 
+  const loadModelOptions = useCallback(async () => {
+    try {
+      const response = await api.getModels()
+      const models = Array.from(new Set((response.models ?? []).map((model) => model.trim()).filter(Boolean)))
+      setModelOptions(models)
+    } catch {
+      setModelOptions([])
+    }
+  }, [])
+
   // 服务端分页加载日志（每页仅传输 20 行）
   const loadLogs = useCallback(async () => {
     setLogsLoading(true)
@@ -169,6 +180,10 @@ export default function Usage() {
   }, [loadAPIKeys])
 
   useEffect(() => {
+    void loadModelOptions()
+  }, [loadModelOptions])
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       void reloadSilently()
     }, 30000)
@@ -193,13 +208,18 @@ export default function Usage() {
     { label: t('usage.allApiKeys'), value: '' },
     ...apiKeys.map((apiKey) => ({ label: formatAPIKeyOptionLabel(apiKey), value: String(apiKey.id) })),
   ]
+  const mergedModelOptions = Array.from(new Set([
+    ...modelOptions,
+    ...logs.map((log) => log.model).filter(Boolean),
+    ...(filterModel ? [filterModel] : []),
+  ])).sort((a, b) => a.localeCompare(b))
 
   return (
     <StateShell
       variant="page"
       loading={loading}
       error={error}
-      onRetry={() => { void reload(); void loadLogs(); void loadAPIKeys() }}
+      onRetry={() => { void reload(); void loadLogs(); void loadAPIKeys(); void loadModelOptions() }}
       loadingTitle={t('usage.loadingTitle')}
       loadingDescription={t('usage.loadingDesc')}
       errorTitle={t('usage.errorTitle')}
@@ -208,7 +228,7 @@ export default function Usage() {
         <PageHeader
           title={t('usage.title')}
           description={t('usage.description')}
-          onRefresh={() => { void reload(); void loadLogs(); void loadAPIKeys() }}
+          onRefresh={() => { void reload(); void loadLogs(); void loadAPIKeys(); void loadModelOptions() }}
         />
 
         {/* Top stats: 2 columns */}
@@ -377,7 +397,7 @@ export default function Usage() {
                 placeholder={t('usage.allModels')}
                 options={[
                   { label: t('usage.allModels'), value: '' },
-                  ...['gpt-5.4', 'gpt-5.4-mini', 'gpt-5', 'gpt-5-codex', 'gpt-5-codex-mini', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.2-codex', 'gpt-5.3-codex'].map((m) => ({ label: m, value: m })),
+                  ...mergedModelOptions.map((m) => ({ label: m, value: m })),
                 ]}
               />
 

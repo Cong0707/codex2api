@@ -337,7 +337,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			ID:                  row.ID,
 			Name:                row.Name,
 			Email:               row.GetCredential("email"),
-			PlanType:            auth.NormalizePlanType(row.GetCredential("plan_type")),
+			PlanType:            strings.ToLower(strings.TrimSpace(row.GetCredential("plan_type"))),
 			SettlementAmountUSD: row.SettledAmount,
 			Status:              row.Status,
 			ATOnly:              !hasRT && hasAT,
@@ -351,8 +351,11 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			resp.UploaderID = &uploaderID
 		}
 		if acc, ok := accountMap[row.ID]; ok {
-			if plan := strings.TrimSpace(acc.GetPlanType()); plan != "" {
-				resp.PlanType = plan
+			acc.Mu().RLock()
+			rawPlan := strings.ToLower(strings.TrimSpace(acc.PlanType))
+			acc.Mu().RUnlock()
+			if rawPlan != "" {
+				resp.PlanType = rawPlan
 			}
 			resp.ActiveRequests = acc.GetActiveRequests()
 			resp.TotalRequests = acc.GetTotalRequests()

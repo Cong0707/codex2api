@@ -126,11 +126,8 @@ func RefreshAccessToken(ctx context.Context, refreshToken string, proxyURL strin
 		td.RefreshToken = refreshToken
 	}
 
-	// 解析 id_token 获取账号信息（与 CPA 逻辑一致）
+	// 解析 id_token 获取账号信息（与 CPA 逻辑一致，保留上游原始 plan_type）
 	info := parseIDToken(tokenResp.IDToken)
-	if info != nil {
-		info.PlanType = NormalizePlanType(info.PlanType)
-	}
 
 	return td, info, nil
 }
@@ -217,7 +214,7 @@ func parseIDToken(idToken string) *AccountInfo {
 	info := &AccountInfo{Email: claims.Email}
 	if claims.OpenAIAuth != nil {
 		info.ChatGPTAccountID = claims.OpenAIAuth.ChatGPTAccountID
-		info.PlanType = NormalizePlanType(claims.OpenAIAuth.PlanType)
+		info.PlanType = strings.ToLower(strings.TrimSpace(claims.OpenAIAuth.PlanType))
 	}
 	return info
 }
@@ -278,7 +275,7 @@ func ParseAccessToken(accessToken string) *AccessTokenInfo {
 	}
 	if claims.OpenAIAuth != nil {
 		info.ChatGPTAccountID = claims.OpenAIAuth.ChatGPTAccountID
-		info.PlanType = NormalizePlanType(claims.OpenAIAuth.PlanType)
+		info.PlanType = strings.ToLower(strings.TrimSpace(claims.OpenAIAuth.PlanType))
 	}
 	if claims.Exp > 0 {
 		info.ExpiresAt = time.Unix(claims.Exp, 0)

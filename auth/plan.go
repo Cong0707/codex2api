@@ -30,6 +30,9 @@ func compactPlanText(plan string) string {
 }
 
 // NormalizePlanType 将上游/导入中的套餐字符串标准化为内部统一值。
+// 注意：该函数仅用于调度、限流、额度等行为判断。
+// OpenAI/CPA 目前会直接返回更细的原始 plan_type（例如 prolite / pro），
+// 存储和前端展示应保留原始值，不要调用该函数覆盖掉细分套餐。
 func NormalizePlanType(plan string) string {
 	text := compactPlanText(plan)
 	if text == "" {
@@ -41,7 +44,7 @@ func NormalizePlanType(plan string) string {
 		return "enterprise"
 	case strings.Contains(text, "team"), strings.Contains(text, "business"), text == "go":
 		return "team"
-	case strings.Contains(text, "pro"):
+	case text == "prolite", text == "pro5x", text == "pro20x", strings.Contains(text, "pro"):
 		return "pro"
 	case strings.Contains(text, "plus"):
 		return "plus"

@@ -106,7 +106,7 @@ func (h *Handler) syncPlanFromWhamUsage(ctx context.Context, account *auth.Accou
 	account.Mu().RLock()
 	accessToken := strings.TrimSpace(account.AccessToken)
 	accountID := strings.TrimSpace(account.AccountID)
-	currentPlan := auth.NormalizePlanType(account.PlanType)
+	currentPlan := normalizeStoredPlanType(account.PlanType)
 	account.Mu().RUnlock()
 	if accessToken == "" {
 		return "", fmt.Errorf("账号缺少 access_token")
@@ -118,7 +118,7 @@ func (h *Handler) syncPlanFromWhamUsage(ctx context.Context, account *auth.Accou
 	defer cancel()
 	snapshots := fetchEndpointSnapshots(planCtx, openAIWhamUsageURL, accessToken, accountID, proxyURL)
 	bestPlan, bestSource, _, _ := pickBestPlanSnapshot(snapshots)
-	bestPlan = auth.NormalizePlanType(bestPlan)
+	bestPlan = normalizeStoredPlanType(bestPlan)
 	if bestPlan == "" {
 		return "", fmt.Errorf("wham/usage 未识别到套餐")
 	}
