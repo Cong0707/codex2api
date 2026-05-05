@@ -2,6 +2,7 @@ package webimage
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,6 +52,7 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 	if req.MaxBytes <= 0 {
 		req.MaxBytes = 16 * 1024 * 1024
 	}
+	referenceHashes := referenceImageHashSet(req.ReferenceImages)
 
 	cr, err := c.ChatRequirementsV2(ctx)
 	if err != nil {
@@ -130,6 +132,22 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 	if len(refs) > 0 {
 		refSet := referenceUploadFileIDSet(refs)
 		fileRefs = filterOutReferenceFileIDs(fileRefs, refSet)
+		// 图生图/编辑时，SSE 经常会先回显用户上传的 file-service:// 参考图。
+		// 如果过滤后没有真正生成图，不要直接失败，也不要把原图返回给下游；
+		// 继续轮询 conversation 的 image_gen tool 消息补拿本轮生成结果。
+		if len(fileRefs) == 0 && convID != "" {
+			status, fids, sids := c.PollConversationForImages(ctx, convID, PollOpts{
+				ExpectedN: 1,
+				MaxWait:   req.PollMaxWait,
+			})
+			if status == PollStatusSuccess {
+				fileRefs = append(fileRefs, fids...)
+				for _, sid := range sids {
+					fileRefs = append(fileRefs, "sed:"+sid)
+				}
+				fileRefs = filterOutReferenceFileIDs(dedupeFileRefs(fileRefs), refSet)
+			}
+		}
 	}
 	if len(fileRefs) == 0 {
 		return nil, errors.New("no generated image reference returned")
@@ -145,6 +163,9 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 		if fetchErr != nil {
 			continue
 		}
+		if isReferenceImageBytes(data, referenceHashes) {
+			continue
+		}
 		result.Images = append(result.Images, GeneratedImage{
 			Data:        data,
 			ContentType: contentType,
@@ -154,6 +175,9 @@ func (c *Client) Generate(ctx context.Context, req GenerateRequest) (*GenerateRe
 		break
 	}
 	if len(result.Images) == 0 {
+		if len(referenceHashes) > 0 {
+			return nil, errors.New("generated image fetch returned only reference image")
+		}
 		return nil, errors.New("fetch generated image failed")
 	}
 	return result, nil
@@ -172,6 +196,51 @@ func referenceUploadFileIDSet(refs []*UploadedFile) map[string]struct{} {
 		out[strings.TrimPrefix(id, "sed:")] = struct{}{}
 	}
 	return out
+}
+
+func dedupeFileRefs(fileRefs []string) []string {
+	if len(fileRefs) <= 1 {
+		return fileRefs
+	}
+	seen := make(map[string]struct{}, len(fileRefs))
+	out := make([]string, 0, len(fileRefs))
+	for _, ref := range fileRefs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+	return out
+}
+
+func referenceImageHashSet(refs []ReferenceImage) map[[32]byte]struct{} {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make(map[[32]byte]struct{}, len(refs))
+	for _, ref := range refs {
+		if len(ref.Data) == 0 {
+			continue
+		}
+		out[sha256.Sum256(ref.Data)] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func isReferenceImageBytes(data []byte, refHashes map[[32]byte]struct{}) bool {
+	if len(data) == 0 || len(refHashes) == 0 {
+		return false
+	}
+	_, ok := refHashes[sha256.Sum256(data)]
+	return ok
 }
 
 func filterOutReferenceFileIDs(fileRefs []string, refSet map[string]struct{}) []string {
